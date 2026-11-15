@@ -218,6 +218,7 @@ SECTIONS = [
     ("automation", "⋆", "Automation", "Staff nudge, idle reminder, auto-close and their messages"),
     ("permissions", "⋆", "Permissions", "Manage staff roles and access permissions"),
     ("transcripts", "୨୧", "Transcript Settings", "Configure transcript generation and archives"),
+    ("vouch", "♡", "Vouch Settings", "Vouch channel, request text and on/off"),
     ("general", "⋆", "General Settings", "Manage general ticket behavior"),
 ]
 
@@ -263,7 +264,7 @@ async def section_screen(bot, user_id: int, guild_id: int, key: str) -> dict:
     if key == "forms":
         return await crud_screen(bot, user_id, guild_id, E["form"])
     name = {"permissions": "permissions", "transcripts": "transcripts", "general": "general",
-            "automation": "automation"}[key]
+            "automation": "automation", "vouch": "vouch"}[key]
     return await edit_screen(bot, user_id, guild_id, E[name], guild_id)
 
 
