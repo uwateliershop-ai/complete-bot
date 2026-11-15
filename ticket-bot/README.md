@@ -14,7 +14,7 @@ buttons, select menus and modals. No source-code editing is needed for normal us
    Place the bot's role **above** the staff roles it will grant access to.
 3. **Run it** (Python 3.10+):
    ```bash
-   pip install -r requirements.txt
+   pip install -U -r requirements.txt     # discord.py 2.7+ is required (vouch form uses image upload)
    cp .env.example .env        # paste DISCORD_TOKEN (optionally DEV_GUILD_ID for instant command sync)
    python main.py
    ```
@@ -29,7 +29,8 @@ Run `/ticket dashboard` (needs *Administrator*, or a role you later set under **
 3. **Form Management** → create a form → **Questions** (max 5 – a Discord modal limit).
 4. **Category Management** → create a category → set its staff roles, Discord channel category, form, welcome message.
 5. **Embed Builder** → create a template (title, description, colour, author, footer, images, **Fields**).
-6. **Panel Management** → create a panel → pick its destination channel + embed template(s) →
+6. **Vouch Settings** → pick the channel where vouches are posted (and turn the vouch request on/off).
+7. **Panel Management** → create a panel → pick its destination channel + embed template(s) →
    **Buttons** / **Dropdowns** (→ **Options**) → each linked to a category → **Publish**.
 
 Published panels **update in place** whenever you change their embeds, buttons, dropdowns or options.
@@ -62,6 +63,9 @@ New or renamed slash commands can take up to an hour to appear globally; `DEV_GU
 
 ## 4 · Behaviour notes
 
+- **Ticket form** – the form answers are posted as their **own message** right under the welcome message (with the Claim/Close buttons), not inside it.
+- **Vouches** – when a ticket is closed the owner gets a separate message with a **Leave a vouch** button, plus a DM with the same button (works even after the channel is deleted). The form has a rating, item/service, staff who helped (pre-filled with the claimer), a comment and an optional image. Vouches are posted in the vouch channel (`/ticket dashboard` → **Vouch Settings**) and stored in `ticket_vouches`. Only the ticket owner can vouch, once per ticket. The request text accepts `{user}` `{number}` and `:server_emoji:`.
+
 - **Button actions** – `create`: opens the category's form if it has one, else creates the ticket · `form`: opens the button's own form, then creates in its category · `category`: creates straight in the category, skipping forms. Every button/option needs a category.
 - **Limits** – *Max open tickets* and *Duplicate prevention* (one open ticket per category per user) are enforced; double-clicks can't create duplicates.
 - **Naming** – placeholders `{number}` `{username}` `{category}`; the 4-digit ticket number is always preserved, also after renames. Welcome messages accept `{user}` `{category}` `{number}`.
@@ -82,6 +86,7 @@ ticketbot/crud.py       dashboard, list/edit screens, modals, pickers
 ticketbot/panels.py     embed builder, panel components, publish + live sync
 ticketbot/tickets.py    ticket creation + all management actions
 ticketbot/transcripts.py HTML transcripts, archive, retrieval
+ticketbot/vouch.py      vouch request on close (channel + DM), vouch form, posting to the vouch channel
 ticketbot/commands.py   /ticket slash command tree (help, dashboard, transcript) + registers the modules below
 ticketbot/quick.py      /ticket quickpanel (one-form panel setup)
 ticketbot/admin.py      /ticket panels · publish · unpublish · settings · list · info · close · reopen · delete
