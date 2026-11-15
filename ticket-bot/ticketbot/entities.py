@@ -292,10 +292,21 @@ TRANSCRIPTS = Entity(
     name_col="id", scoped=False, singleton=True,
 )
 
+VOUCH = Entity(
+    "vouch", "guild_settings", "Vouch Settings", "vouch settings", "♡",
+    groups={"Messages": [
+        Field("vouch_message", "Vouch request text – {user} {number}", "para", max=1000,
+              placeholder="Thank you for choosing us {user}! Would you like to leave a vouch?"),
+    ]},
+    pickers=[Picker("vouch_channel_id", "Vouch channel (where vouches are posted)", "channel")],
+    toggles={"vouch_enabled": "Ask for a vouch when a ticket closes"},
+    name_col="id", scoped=False, singleton=True,
+)
+
 ENTITIES: dict[str, Entity] = {
     e.name: e for e in (
         PANEL, EMBED, EMBED_FIELD, BUTTON, AR_BUTTON, DROPDOWN, OPTION, CATEGORY, FORM, QUESTION,
-        AUTORESPONDER, AUTOMATION, GENERAL, PERMS, TRANSCRIPTS,
+        AUTORESPONDER, AUTOMATION, GENERAL, PERMS, TRANSCRIPTS, VOUCH,
     )
 }
 
