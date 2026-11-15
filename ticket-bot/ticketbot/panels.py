@@ -7,16 +7,10 @@ import logging
 
 import discord
 
-from . import media, tickets
+from . import actions, media, tickets
 from .util import BLURPLE, DARK, decorate, is_quick, jload, truncate
 
 log = logging.getLogger(__name__)
-
-STYLES = {
-    "primary": discord.ButtonStyle.primary, "secondary": discord.ButtonStyle.secondary,
-    "success": discord.ButtonStyle.success, "danger": discord.ButtonStyle.danger,
-}
-
 
 # ---------------------------------------------------------------------------
 # Embed builder
@@ -51,20 +45,20 @@ async def build_embed(bot, tpl: dict) -> discord.Embed:
 # ---------------------------------------------------------------------------
 class PanelButton(discord.ui.Button):
     def __init__(self, bot, data: dict, row: int, preview: bool, disabled: bool):
-        label, emoji = decorate(data["label"], data["emoji"])
-        super().__init__(
-            label=truncate(label, 80), style=STYLES.get(data["style"], discord.ButtonStyle.primary),
-            emoji=emoji, row=row, disabled=preview or disabled,
-            custom_id=f"tb:{'p' if preview else 'b'}:{data['id']}",
-        )
+        kwargs = actions.button_kwargs(data)
+        if actions.is_link(data):                          # link buttons open the URL, they have no callback
+            kwargs.pop("style")
+            super().__init__(url=data["url"], row=row, disabled=disabled, **kwargs)
+        else:
+            super().__init__(row=row, disabled=preview or disabled,
+                             custom_id=f"tb:{'p' if preview else 'b'}:{data['id']}", **kwargs)
         self.bot, self.data = bot, data
 
     async def callback(self, interaction: discord.Interaction):
         fresh = await self.bot.db.get("panel_buttons", self.data["id"])   # always use current config
         if not fresh or not fresh["enabled"]:
             return await interaction.response.send_message("⋆｡°✩ This button is no longer available.", ephemeral=True)
-        await tickets.handle_entry(interaction, self.bot, category_id=fresh["category_id"], action=fresh["action"],
-                                   form_id=fresh["form_id"], panel_id=fresh["panel_id"])
+        await actions.run(interaction, self.bot, fresh, panel_id=fresh["panel_id"])
 
 
 class PanelSelect(discord.ui.Select):
