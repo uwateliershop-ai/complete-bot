@@ -23,6 +23,12 @@ CREATE TABLE IF NOT EXISTS guild_settings (
     auto_transcript INTEGER NOT NULL DEFAULT 1,
     archive_channel_id INTEGER,
     log_channel_id INTEGER,
+    unclaimed_minutes INTEGER NOT NULL DEFAULT 0,   -- nudge staff if nobody answered after N minutes (0 = off)
+    idle_hours INTEGER NOT NULL DEFAULT 0,          -- remind a quiet ticket owner after N hours (0 = off)
+    autoclose_hours INTEGER NOT NULL DEFAULT 0,     -- close N hours after the reminder (0 = never)
+    autoreply_enabled INTEGER NOT NULL DEFAULT 1,   -- master switch for auto-responders
+    nudge_message TEXT,
+    idle_message TEXT,
     ticket_counter INTEGER NOT NULL DEFAULT 0
 );
 
@@ -112,6 +118,11 @@ CREATE TABLE IF NOT EXISTS panel_buttons (
     action TEXT NOT NULL DEFAULT 'create',
     category_id INTEGER REFERENCES categories(id) ON DELETE SET NULL,
     form_id INTEGER REFERENCES forms(id) ON DELETE SET NULL,
+    url TEXT,                                     -- action 'link'
+    reply_text TEXT,                              -- action 'reply'
+    reply_embed_id INTEGER REFERENCES embed_templates(id) ON DELETE SET NULL,
+    role_id INTEGER,                              -- action 'role' (toggle)
+    ephemeral INTEGER NOT NULL DEFAULT 1,         -- reply only visible to the clicker
     enabled INTEGER NOT NULL DEFAULT 1,
     position INTEGER NOT NULL DEFAULT 0
 );
@@ -180,73 +191,39 @@ CREATE TABLE IF NOT EXISTS transcripts (
     archive_message_id INTEGER,
     created_at TEXT NOT NULL
 );
-CREATE TABLE IF NOT EXISTS shop_settings (
-    guild_id INTEGER PRIMARY KEY,
-    shop_name TEXT NOT NULL DEFAULT 'shop',
-    order_category_id INTEGER,
-    queue_channel_id INTEGER,
-    vouch_channel_id INTEGER,
-    updates_channel_id INTEGER,
-    rules_channel_id INTEGER,
-    pledge_phrase TEXT NOT NULL DEFAULT 'i swear',
-    gcash_info TEXT, paypal_info TEXT, robux_info TEXT,
-    robux_note TEXT NOT NULL DEFAULT 'robux can only be used 4 commis only!',
-    deals_channel_id INTEGER, deals_message_id INTEGER,
-    unclaimed_minutes INTEGER NOT NULL DEFAULT 15,
-    idle_hours INTEGER NOT NULL DEFAULT 24,
-    autoclose_hours INTEGER NOT NULL DEFAULT 0,
-    autoreply_enabled INTEGER NOT NULL DEFAULT 1,
-    autoreply_when_claimed INTEGER NOT NULL DEFAULT 0,
-    order_counter INTEGER NOT NULL DEFAULT 0
-);
-
-CREATE TABLE IF NOT EXISTS orders (
+CREATE TABLE IF NOT EXISTS autoresponders (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     guild_id INTEGER NOT NULL,
-    ticket_id INTEGER NOT NULL,
-    channel_id INTEGER NOT NULL,
-    owner_id INTEGER NOT NULL,
-    code TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'pledge',   -- pledge|form|confirming|payment|paid_review|lined_up|processing|done
-    username TEXT, item TEXT, quantity INTEGER NOT NULL DEFAULT 1,
-    pay_method TEXT, notes TEXT, price REAL, deal_id INTEGER,
-    payment_ref TEXT,
-    pledge_message_id INTEGER, confirm_message_id INTEGER, pay_message_id INTEGER, proof_message_id INTEGER,
-    ticket_queue_message_id INTEGER, queue_channel_id INTEGER, queue_message_id INTEGER,
-    vouch_message_id INTEGER,
-    slot_held INTEGER NOT NULL DEFAULT 0,
-    created_at TEXT NOT NULL, updated_at TEXT
-);
-CREATE INDEX IF NOT EXISTS idx_orders_channel ON orders(channel_id);
-CREATE INDEX IF NOT EXISTS idx_orders_queue ON orders(queue_message_id);
-
-CREATE TABLE IF NOT EXISTS deals (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    guild_id INTEGER NOT NULL,
-    name TEXT NOT NULL, price TEXT, inclusions TEXT,
-    slots_max INTEGER NOT NULL DEFAULT 0,        -- 0 = no slot limit
-    slots_used INTEGER NOT NULL DEFAULT 0,
-    position INTEGER NOT NULL DEFAULT 0,
-    UNIQUE (guild_id, name)
-);
-
-CREATE TABLE IF NOT EXISTS autoreplies (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    guild_id INTEGER NOT NULL,
-    trigger TEXT NOT NULL,                       -- comma separated keywords
-    response TEXT NOT NULL,
-    match_type TEXT NOT NULL DEFAULT 'contains', -- contains | exact
+    name TEXT NOT NULL,
+    trigger TEXT NOT NULL,                        -- comma separated keywords
+    match_type TEXT NOT NULL DEFAULT 'contains',  -- contains | exact | starts
+    response TEXT,                                -- plain text ({user} {username} {server} {channel} {ticket})
+    embed_id INTEGER REFERENCES embed_templates(id) ON DELETE SET NULL,
+    scope TEXT NOT NULL DEFAULT 'tickets',        -- tickets | server
+    channel_id INTEGER,                           -- scope 'server': only in this channel (NULL = everywhere)
+    cooldown INTEGER NOT NULL DEFAULT 60,         -- seconds, per channel
+    reply INTEGER NOT NULL DEFAULT 1,             -- reply to the member's message instead of a plain send
+    staff_triggers INTEGER NOT NULL DEFAULT 0,    -- staff messages can trigger it too
+    when_claimed INTEGER NOT NULL DEFAULT 0,      -- keep answering after a ticket was claimed
     enabled INTEGER NOT NULL DEFAULT 1
 );
+CREATE INDEX IF NOT EXISTS idx_autoresponders_guild ON autoresponders(guild_id);
 
-CREATE TABLE IF NOT EXISTS vouches (
+CREATE TABLE IF NOT EXISTS autoresponder_buttons (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    guild_id INTEGER NOT NULL,
-    order_id INTEGER NOT NULL,
-    user_id INTEGER NOT NULL,
-    rating INTEGER NOT NULL,
-    comment TEXT,
-    created_at TEXT NOT NULL
+    responder_id INTEGER NOT NULL REFERENCES autoresponders(id) ON DELETE CASCADE,
+    label TEXT NOT NULL, emoji TEXT,
+    style TEXT NOT NULL DEFAULT 'secondary',
+    action TEXT NOT NULL DEFAULT 'reply',
+    category_id INTEGER REFERENCES categories(id) ON DELETE SET NULL,
+    form_id INTEGER REFERENCES forms(id) ON DELETE SET NULL,
+    url TEXT,
+    reply_text TEXT,
+    reply_embed_id INTEGER REFERENCES embed_templates(id) ON DELETE SET NULL,
+    role_id INTEGER,
+    ephemeral INTEGER NOT NULL DEFAULT 1,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    position INTEGER NOT NULL DEFAULT 0
 );
 """
 
@@ -280,7 +257,44 @@ class Database:
                           ("staff_replied", "INTEGER NOT NULL DEFAULT 0")):
             if name not in tcols:
                 await self.conn.execute(f"ALTER TABLE tickets ADD COLUMN {name} {ddl}")
+        gcols = {r["name"] for r in await self.fetchall("PRAGMA table_info(guild_settings)")}
+        for name, ddl in (("unclaimed_minutes", "INTEGER NOT NULL DEFAULT 0"), ("idle_hours", "INTEGER NOT NULL DEFAULT 0"),
+                          ("autoclose_hours", "INTEGER NOT NULL DEFAULT 0"), ("autoreply_enabled", "INTEGER NOT NULL DEFAULT 1"),
+                          ("nudge_message", "TEXT"), ("idle_message", "TEXT")):
+            if name not in gcols:
+                await self.conn.execute(f"ALTER TABLE guild_settings ADD COLUMN {name} {ddl}")
+        bcols = {r["name"] for r in await self.fetchall("PRAGMA table_info(panel_buttons)")}
+        for name, ddl in (("url", "TEXT"), ("reply_text", "TEXT"),
+                          ("reply_embed_id", "INTEGER REFERENCES embed_templates(id) ON DELETE SET NULL"),
+                          ("role_id", "INTEGER"), ("ephemeral", "INTEGER NOT NULL DEFAULT 1")):
+            if name not in bcols:
+                await self.conn.execute(f"ALTER TABLE panel_buttons ADD COLUMN {name} {ddl}")
         await self._migrate_quick_banners()
+        await self._migrate_legacy_shop()
+
+    async def _migrate_legacy_shop(self) -> None:
+        """One-time: carry timers and keyword auto-replies over from the old shop layer (tables are left untouched)."""
+        if (await self.fetchone("PRAGMA user_version"))["user_version"] >= 1:
+            return
+        tables = {r["name"] for r in await self.fetchall("SELECT name FROM sqlite_master WHERE type = 'table'")}
+        claimed: dict[int, int] = {}
+        if "shop_settings" in tables:
+            for s in await self.fetchall("SELECT * FROM shop_settings"):
+                await self.conn.execute("INSERT OR IGNORE INTO guild_settings (id) VALUES (?)", (s["guild_id"],))
+                await self.conn.execute(
+                    "UPDATE guild_settings SET unclaimed_minutes = ?, idle_hours = ?, autoclose_hours = ?, "
+                    "autoreply_enabled = ? WHERE id = ?",
+                    (s["unclaimed_minutes"], s["idle_hours"], s["autoclose_hours"], s["autoreply_enabled"], s["guild_id"]))
+                claimed[s["guild_id"]] = s["autoreply_when_claimed"]
+        if "autoreplies" in tables:
+            for r in await self.fetchall("SELECT * FROM autoreplies ORDER BY id"):
+                first = (r["trigger"].split(",")[0].strip() or "reply")[:40]
+                await self.conn.execute(
+                    "INSERT INTO autoresponders (guild_id, name, trigger, match_type, response, scope, cooldown, "
+                    "when_claimed, enabled) VALUES (?, ?, ?, ?, ?, 'tickets', 300, ?, ?)",
+                    (r["guild_id"], f"{first} (#{r['id']})", r["trigger"], r["match_type"], r["response"],
+                     claimed.get(r["guild_id"], 0), r["enabled"]))
+        await self.conn.execute("PRAGMA user_version = 1")
 
     async def _migrate_quick_banners(self) -> None:
         """Older quick panels kept their banner in a hidden embed template; it is now the first gallery image."""
