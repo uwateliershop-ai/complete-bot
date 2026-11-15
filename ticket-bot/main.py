@@ -10,7 +10,7 @@ from discord import app_commands
 from discord.ext import commands
 from dotenv import load_dotenv
 
-from ticketbot import orders, panels, tickets
+from ticketbot import autoresponder, automation, panels, tickets
 from ticketbot.commands import build_group
 from ticketbot.db import Database
 
@@ -33,12 +33,10 @@ class TicketBot(commands.Bot):
         self.add_view(tickets.TicketControlView(self))
         self.add_view(tickets.ClosedView(self))
         await panels.register_panel_views(self)
-        for view in orders.persistent_views(self):      # order flow buttons survive restarts
-            self.add_view(view)
-        self._watcher = asyncio.create_task(orders.watcher(self))
+        self.add_dynamic_items(autoresponder.ResponderButton)   # auto-responder buttons survive restarts
+        self._watcher = asyncio.create_task(automation.watcher(self))
 
         self.tree.add_command(build_group(self))
-        self.tree.add_command(orders.build_shop_group(self))
         self.tree.on_error = self.on_tree_error
         dev_guild = os.getenv("DEV_GUILD_ID", "").strip()
         if dev_guild:                     # instant sync while developing
@@ -58,7 +56,7 @@ class TicketBot(commands.Bot):
 
     async def on_message(self, message: discord.Message) -> None:
         try:
-            await orders.handle_message(self, message)   # pledge phrase, auto-replies, activity tracking
+            await autoresponder.handle_message(self, message)   # auto-responders + ticket activity tracking
         except Exception:
             log.exception("on_message failed")
 
