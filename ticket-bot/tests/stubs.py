@@ -36,7 +36,7 @@ class NotFound(HTTPException): pass
 class Forbidden(HTTPException): pass
 d.HTTPException, d.NotFound, d.Forbidden = HTTPException, NotFound, Forbidden
 
-class ButtonStyle(enum.Enum): primary=1; secondary=2; success=3; danger=4
+class ButtonStyle(enum.Enum): primary=1; secondary=2; success=3; danger=4; link=5
 class TextStyle(enum.Enum): short=1; paragraph=2
 class ChannelType(enum.Enum): text=0; news=5; category=4
 class MessageType(enum.Enum): default=0; reply=19; pins_add=6
@@ -111,8 +111,14 @@ class Item:
     callback = None
     view = None
 class Button(Item):
-    def __init__(s, label=None, style=None, emoji=None, row=None, disabled=False, custom_id=None):
-        s.label, s.style, s.emoji, s.row, s.disabled, s.custom_id = label, style, emoji, row, disabled, custom_id
+    def __init__(s, label=None, style=None, emoji=None, row=None, disabled=False, custom_id=None, url=None):
+        assert not (url and custom_id), "link buttons have no custom_id"
+        if url: style = ButtonStyle.link
+        s.label, s.style, s.emoji, s.row, s.disabled, s.custom_id, s.url = label, style, emoji, row, disabled, custom_id, url
+class DynamicItem(Item):
+    def __class_getitem__(cls, item): return cls
+    def __init_subclass__(cls, template=None, **kw): cls.template = template
+    def __init__(s, item): s.item, s.row, s.custom_id = item, item.row, item.custom_id
 class Select(Item):
     def __init__(s, placeholder=None, min_values=1, max_values=1, options=None, row=None, disabled=False,
                  custom_id=None, **kw):
@@ -145,7 +151,7 @@ class Modal:
     def __init_subclass__(cls, title=None, **kw): cls._title = title
     def __init__(s, title=None, **kw): s.title = title or getattr(type(s), "_title", None); s.children = []
     def add_item(s, item): s.children.append(item)
-ui.View, ui.Modal, ui.Button, ui.Select = View, Modal, Button, Select
+ui.View, ui.Modal, ui.Button, ui.Select, ui.DynamicItem = View, Modal, Button, Select, DynamicItem
 ui.RoleSelect, ui.UserSelect, ui.ChannelSelect, ui.TextInput, ui.button = RoleSelect, UserSelect, ChannelSelect, TextInput, button
 d.ui = ui; d.SelectOption = SelectOption; sys.modules["discord.ui"] = ui
 
