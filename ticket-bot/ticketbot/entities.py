@@ -29,7 +29,7 @@ class Field:
 class Picker:
     key: str
     label: str
-    kind: str                 # roles | channel | category | ref | refs
+    kind: str                 # roles | role | channel | category | ref | refs
     ref: str | None = None    # entity name for ref / refs
 
 
@@ -54,10 +54,44 @@ class Entity:
 
 
 STYLE_CHOICES = ("primary", "secondary", "success", "danger")
-ACTION_CHOICES = ("create", "form", "category")
+ACTION_CHOICES = ("create", "form", "category", "link", "reply", "role")
+
+EMOJI_HINT = "♡   or   :server_emoji:   or   <:name:123456789012345678>"
+
+
+def button_entity(name: str, table: str, title: str, parent: str, parent_col: str, *, default_action: str,
+                  default_style: str) -> Entity:
+    """Panel buttons and auto-responder buttons are configured the same way."""
+    return Entity(
+        name, table, title, "button", "⋆",
+        groups={
+            "Button": [
+                Field("label", "Label", required=True, max=80),
+                Field("emoji", "Emoji (♡ · :name: · server emoji)", "emoji", max=64, placeholder=EMOJI_HINT),
+                Field("style", "Style: primary/secondary/success/danger", "choice",
+                      required=True, choices=STYLE_CHOICES, default=default_style, max=10),
+                Field("action", "Action: create/form/category/link/reply/role", "choice",
+                      required=True, choices=ACTION_CHOICES, default=default_action, max=10),
+            ],
+            "Link & reply": [
+                Field("url", "Link URL (for 'link')", "url", max=500, placeholder="https://…"),
+                Field("reply_text", "Reply text (for 'reply') – {user} {server}", "para", max=1500),
+            ],
+        },
+        pickers=[
+            Picker("category_id", "Ticket category (create / form / category)", "ref", "category"),
+            Picker("form_id", "Form (for 'form' action)", "ref", "form"),
+            Picker("reply_embed_id", "Reply embed (for 'reply')", "ref", "embed"),
+            Picker("role_id", "Role to toggle (for 'role')", "role"),
+        ],
+        toggles={"ephemeral": "Reply visible only to the clicker"},
+        name_col="label", parent=parent, parent_col=parent_col, scoped=False,
+        ordered=True, enable_col="enabled", max_children=25,
+    )
+
 
 PANEL = Entity(
-    "panel", "panels", "Ticket Panels", "panel", "⋆",
+    "panel", "panels", "Panels & Cards", "panel", "⋆",
     groups={
         "Basics": [
             Field("name", "Panel name", required=True),
@@ -110,23 +144,56 @@ EMBED_FIELD = Entity(
     parent="embed", parent_col="embed_id", scoped=False, ordered=True, max_children=25,
 )
 
-BUTTON = Entity(
-    "button", "panel_buttons", "Panel Buttons", "button", "⋆",
-    groups={"Button": [
-        Field("label", "Label", required=True, max=80),
-        Field("emoji", "Emoji (♡ · :name: · server emoji)", "emoji", max=64,
-              placeholder="♡   or   :server_emoji:   or   <:name:123456789012345678>"),
-        Field("style", "Style: primary/secondary/success/danger", "choice",
-              required=True, choices=STYLE_CHOICES, default="primary", max=10),
-        Field("action", "Action: create / form / category", "choice",
-              required=True, choices=ACTION_CHOICES, default="create", max=10),
-    ]},
+BUTTON = button_entity("button", "panel_buttons", "Card & Panel Buttons", "panel", "panel_id",
+                       default_action="create", default_style="primary")
+AR_BUTTON = button_entity("ar_button", "autoresponder_buttons", "Auto-Responder Buttons", "autoresponder",
+                          "responder_id", default_action="reply", default_style="secondary")
+
+AUTORESPONDER = Entity(
+    "autoresponder", "autoresponders", "Auto-Responders", "auto-responder", "⋆",
+    groups={
+        "Trigger & reply": [
+            Field("name", "Name (only you see this)", required=True, max=60),
+            Field("trigger", "Keywords, comma separated", required=True, max=300, placeholder="price, how much, hours"),
+            Field("match_type", "Match: contains / exact / starts", "choice", required=True,
+                  choices=("contains", "exact", "starts"), default="contains", max=8),
+            Field("response", "Reply text – {user} {username} {server} {channel} {ticket}", "para", max=1900),
+        ],
+        "Where & how often": [
+            Field("scope", "Where: tickets / server", "choice", required=True,
+                  choices=("tickets", "server"), default="tickets", max=8),
+            Field("cooldown", "Cooldown in seconds, per channel", "int", default=60, lo=0, hi=86400, max=5),
+        ],
+    },
     pickers=[
-        Picker("category_id", "Ticket category", "ref", "category"),
-        Picker("form_id", "Form (for 'form' action)", "ref", "form"),
+        Picker("embed_id", "Embed card to send (optional)", "ref", "embed"),
+        Picker("channel_id", "Only in this channel (scope: server)", "channel"),
     ],
-    name_col="label", parent="panel", parent_col="panel_id", scoped=False,
-    ordered=True, enable_col="enabled", max_children=25,
+    toggles={"reply": "Reply to the message", "staff_triggers": "Staff can trigger it",
+             "when_claimed": "Keep replying after a ticket is claimed"},
+    enable_col="enabled",
+)
+
+AUTOMATION = Entity(
+    "automation", "guild_settings", "Automation", "automation", "⋆",
+    groups={
+        "Timers": [
+            Field("unclaimed_minutes", "Nudge staff if nobody answered after N minutes (0 = off)", "int",
+                  default=0, lo=0, hi=43200, max=5),
+            Field("idle_hours", "Remind a quiet ticket owner after N hours (0 = off)", "int",
+                  default=0, lo=0, hi=720, max=4),
+            Field("autoclose_hours", "Close N hours after that reminder (0 = never)", "int",
+                  default=0, lo=0, hi=720, max=4),
+        ],
+        "Messages": [
+            Field("nudge_message", "Staff nudge – {user} {number}", "para", max=1000,
+                  placeholder="Thanks for waiting {user}! A staff member will be with you shortly."),
+            Field("idle_message", "Idle reminder – {user} {number}", "para", max=1000,
+                  placeholder="Still there {user}? We haven't heard from you in a while."),
+        ],
+    },
+    toggles={"autoreply_enabled": "Auto-responders (master switch)"},
+    name_col="id", scoped=False, singleton=True,
 )
 
 DROPDOWN = Entity(
@@ -227,8 +294,8 @@ TRANSCRIPTS = Entity(
 
 ENTITIES: dict[str, Entity] = {
     e.name: e for e in (
-        PANEL, EMBED, EMBED_FIELD, BUTTON, DROPDOWN, OPTION, CATEGORY, FORM, QUESTION,
-        GENERAL, PERMS, TRANSCRIPTS,
+        PANEL, EMBED, EMBED_FIELD, BUTTON, AR_BUTTON, DROPDOWN, OPTION, CATEGORY, FORM, QUESTION,
+        AUTORESPONDER, AUTOMATION, GENERAL, PERMS, TRANSCRIPTS,
     )
 }
 
