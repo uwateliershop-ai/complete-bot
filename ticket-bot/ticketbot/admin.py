@@ -255,6 +255,11 @@ def add_admin_commands(bot, group: app_commands.Group, admin_gate) -> None:
         embed.add_field(name="Auto transcripts", value=flag(s["auto_transcript"]))
         embed.add_field(name="Name format", value=truncate(f"`{s['naming_format']}`", 200))
         embed.add_field(name="Welcome message", value=truncate(s["welcome_message"] or "—", 300), inline=False)
+        embed.add_field(name="Auto-responders", value=flag(s["autoreply_enabled"]))
+        embed.add_field(name="Staff nudge", value=f"{s['unclaimed_minutes']} min" if s["unclaimed_minutes"] else "off")
+        embed.add_field(name="Idle reminder / auto-close",
+                        value=(f"{s['idle_hours']} h" if s["idle_hours"] else "off")
+                              + (f" / +{s['autoclose_hours']} h" if s["idle_hours"] and s["autoclose_hours"] else ""))
         panels_n = await _count(db, "SELECT COUNT(*) AS n FROM panels WHERE guild_id = ?", (gid,))
         cats_n = await _count(db, "SELECT COUNT(*) AS n FROM categories WHERE guild_id = ?", (gid,))
         forms_n = await _count(db, "SELECT COUNT(*) AS n FROM forms WHERE guild_id = ?", (gid,))
@@ -262,6 +267,24 @@ def add_admin_commands(bot, group: app_commands.Group, admin_gate) -> None:
         embed.add_field(name="Totals", inline=False,
                         value=f"{panels_n} panels · {cats_n} categories · {forms_n} forms · {open_n} open tickets")
         embed.set_footer(text="Change these in /ticket dashboard")
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    # ---- auto-responders ----------------------------------------------------
+    @group.command(name="autoreplies", description="List the auto-responders and where they work.")
+    async def autoreplies_command(interaction: discord.Interaction):
+        if not await admin_gate(interaction, bot):
+            return
+        rows = await db.where("autoresponders", order="id", guild_id=interaction.guild_id)
+        if not rows:
+            return await interaction.response.send_message(
+                "No auto-responders yet. Create one in `/ticket dashboard` → **Auto-Responders**.", ephemeral=True)
+        lines = []
+        for r in rows:
+            where = "tickets" if r["scope"] == "tickets" else (f"<#{r['channel_id']}>" if r["channel_id"] else "server")
+            lines.append(f"{'ʚ♡ɞ' if r['enabled'] else '⋆｡°✩'} **{truncate(r['name'], 40)}** · {where} · "
+                         f"`{truncate(r['trigger'], 60)}`")
+        embed = discord.Embed(title="⋆ Auto-responders", description=truncate("\n".join(lines), 4000), color=BLURPLE)
+        embed.set_footer(text="Edit them in /ticket dashboard → Auto-Responders")
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     # ---- ticket overview ---------------------------------------------------
