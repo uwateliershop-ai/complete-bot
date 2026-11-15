@@ -26,7 +26,8 @@ class FakeMember(discord.Member):
         s.id, s.guild, s.bot, s.roles = id, guild, bot, list(roles)
         s.name = name or f"user{id}"; s.display_name = s.name; s.mention = f"<@{id}>"
         s.guild_permissions = NS(administrator=admin)
-        s.display_avatar = NS(url="https://x/a.png"); s.color = NS(value=0)
+        s.display_avatar = NS(url="https://x/a.png"); s.color = NS(value=0); s.dms = []
+    async def send(s, *a, **k): s.dms.append((a, k))
 class FakeMsg:
     _n = 1000
     def __init__(s, **k):
@@ -198,7 +199,9 @@ async def main():
     ok(t["number"] == 1 and ch.name == "order-support-0001", f"ticket created, channel name {ch.name}")
     ok(10 in {getattr(k, 'id', None) for k in ch.kwargs["overwrites"]}, "staff role overwrite set")
     ok(inter2.followups and "created" in inter2.followups[0][0][0], "owner notified")
-    ok(len(ch.sent[0][1]["embed"].fields) == 5 and "Alice" not in "", "form answers shown in ticket")
+    ok(len(ch.sent[0][1]["embed"].fields) == 0, "welcome message carries no form fields")
+    ok(len(ch.sent) >= 2 and len(ch.sent[1][1]["embed"].fields) == 5 and "view" not in ch.sent[1][1],
+       "form answers sent as a separate message")
     # duplicate prevention
     inter3 = FakeInteraction(user, guild, channel=dest)
     await tickets.handle_entry(inter3, bot, category_id=cat["id"], action="category", form_id=None, panel_id=panel["id"])
@@ -248,6 +251,36 @@ async def main():
     ok("Ticket Closed" in html_text and "Order ID" in html_text, "transcript has activity log + form answers")
     ok(any("Transcript" in (a[1].get("embed").title if a[1].get("embed") else "") for a in dest.sent), "transcript posted to archive channel")
     ok(any(k == 2 for k in ch.perms), "owner restricted on close")
+    # ---- vouch: request after close, one vouch per ticket
+    owner = guild.members.get(2) or FakeMember(2, guild); guild.members[2] = owner
+    vch = FakeChannel(77, "vouches", guild); guild.channels[77] = vch
+    await db.update("guild_settings", 1, {"vouch_channel_id": 77})
+    prompts = [a for a in ch.sent if a[1].get("view") is not None and a[1].get("embed") is not None
+               and "How did we do" in (a[1]["embed"].title or "")]
+    ok(len(prompts) == 1, "vouch request sent as its own message on close")
+    ok(owner.dms and "How did we do" in owner.dms[-1][1]["embed"].title, "vouch request also sent by DM")
+    from ticketbot import vouch as V
+    tkt = await db.get("tickets", t["id"])
+    btn = V.VouchButton(tkt["id"])
+    stranger = FakeMember(55, guild)
+    bi = FakeInteraction(stranger, guild, channel=ch); bi.client = bot
+    await V.VouchButton.callback(btn, bi)
+    ok("Only the ticket owner" in bi.response.log[0][1][0], "only the ticket owner can vouch")
+    bi = FakeInteraction(owner, guild, channel=ch); bi.client = bot
+    await V.VouchButton.callback(btn, bi)
+    ok(bi.response.log[0][0] == "modal" and len(bi.response.log[0][1][0].children) == 5, "vouch button opens 5-part form")
+    vm = bi.response.log[0][1][0]
+    ok(isinstance(vm.rating, discord.ui.Select) and len(vm.rating.options) == 5, "rating dropdown has 5 choices")
+    vm.rating.values = ["5"]; vm.item.value = "Logo"; vm.comment.value = "so good"
+    vm.staff.values = []; vm.image.values = []
+    si = FakeInteraction(owner, guild, channel=ch); si.client = bot
+    await vm.on_submit(si)
+    row = await db.fetchone("SELECT * FROM ticket_vouches WHERE ticket_id = ?", (tkt["id"],))
+    ok(row and row["rating"] == 5 and row["item"] == "Logo", "vouch saved")
+    ok(vch.sent and "New vouch" in vch.sent[-1][1]["embed"].title, "vouch posted in the vouch channel")
+    bi = FakeInteraction(owner, guild, channel=ch); bi.client = bot
+    await V.VouchButton.callback(btn, bi)
+    ok("already vouched" in bi.response.log[0][1][0], "second vouch refused")
     # reopen
     closed = tickets.ClosedView(bot); ci = FakeInteraction(staff, guild, channel=ch, message=object()); await closed.reopen.callback(ci)
     ok((await db.get("tickets", t["id"]))["status"] == "open", "reopen")
