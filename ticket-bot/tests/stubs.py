@@ -130,10 +130,19 @@ class RoleSelect(Select): pass
 class UserSelect(Select): pass
 class ChannelSelect(Select): pass
 class TextInput(Item):
-    def __init__(s, label, style=None, required=True, placeholder=None, default=None, max_length=None):
+    def __init__(s, label=None, style=None, required=True, placeholder=None, default=None, max_length=None):
         assert max_length is None or max_length <= 4000
         s.label, s.required, s.default, s.max_length = label, required, default, max_length
         s.value = default or ""
+class Label(Item):
+    def __init__(s, *, text, component, description=None):
+        s.text, s.component, s.description = text, component, description
+class FileUpload(Item):
+    def __init__(s, *, custom_id=None, required=True, min_values=None, max_values=None):
+        s.required, s.min_values, s.max_values, s.values = required, min_values, max_values, []
+class SelectDefaultValueType(enum.Enum): user=1; role=2; channel=3
+class SelectDefaultValue:
+    def __init__(s, *, id, type): s.id, s.type = id, type
 class View:
     def __init__(s, timeout=180):
         s.timeout, s.children = timeout, []
@@ -153,6 +162,8 @@ class Modal:
     def add_item(s, item): s.children.append(item)
 ui.View, ui.Modal, ui.Button, ui.Select, ui.DynamicItem = View, Modal, Button, Select, DynamicItem
 ui.RoleSelect, ui.UserSelect, ui.ChannelSelect, ui.TextInput, ui.button = RoleSelect, UserSelect, ChannelSelect, TextInput, button
+ui.Label, ui.FileUpload = Label, FileUpload
+d.SelectDefaultValue, d.SelectDefaultValueType = SelectDefaultValue, SelectDefaultValueType
 d.ui = ui; d.SelectOption = SelectOption; sys.modules["discord.ui"] = ui
 
 utils = types.ModuleType("discord.utils")
