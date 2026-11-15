@@ -10,7 +10,7 @@ from discord import app_commands
 from discord.ext import commands
 from dotenv import load_dotenv
 
-from ticketbot import autoresponder, automation, panels, tickets
+from ticketbot import autoresponder, automation, panels, tickets, vouch
 from ticketbot.commands import build_group
 from ticketbot.db import Database
 
@@ -34,6 +34,7 @@ class TicketBot(commands.Bot):
         self.add_view(tickets.ClosedView(self))
         await panels.register_panel_views(self)
         self.add_dynamic_items(autoresponder.ResponderButton)   # auto-responder buttons survive restarts
+        self.add_dynamic_items(vouch.VouchButton)               # vouch buttons (channel + DM) survive restarts
         self._watcher = asyncio.create_task(automation.watcher(self))
 
         self.tree.add_command(build_group(self))
