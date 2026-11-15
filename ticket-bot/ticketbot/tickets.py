@@ -7,7 +7,7 @@ import logging
 
 import discord
 
-from . import media, transcripts
+from . import media, transcripts, vouch
 from .ui import ConfirmView
 from .util import (BLURPLE, GREEN, GREY, RED, channel_name, ensure_number, get_settings, is_admin,
                    is_staff, jload, render, truncate)
@@ -196,8 +196,6 @@ async def create_ticket(interaction: discord.Interaction, bot, category: dict, p
     embed = discord.Embed(title=f"୨୧ Ticket #{number:04d} – {category['name']}", description=welcome[:4000],
                           color=BLURPLE, timestamp=discord.utils.utcnow())
     embed.set_footer(text=f"Opened by {user.display_name}", icon_url=user.display_avatar.url)
-    for ans in answers:
-        embed.add_field(name=truncate(ans["q"], 256), value=truncate(ans["a"], 1024), inline=False)
     mentions = user.mention
     if category["mention_staff"] and staff_roles:
         mentions += " " + " ".join(r.mention for r in staff_roles)
@@ -208,6 +206,11 @@ async def create_ticket(interaction: discord.Interaction, bot, category: dict, p
         if not rich.stickers:
             raise
         await channel.send(content=mentions, embed=embed, view=TicketControlView(bot))   # without the stickers
+    if answers:                                        # the form goes in its own message, apart from the welcome
+        form_embed = discord.Embed(title="୨୧ Ticket form", color=BLURPLE, timestamp=discord.utils.utcnow())
+        for ans in answers:
+            form_embed.add_field(name=truncate(ans["q"], 256), value=truncate(ans["a"], 1024), inline=False)
+        await channel.send(embed=form_embed)
     await log_event(bot, guild, ticket, "ticket_created", user.id,
                     f"Category: {category['name']} | Channel: #{channel.name}")
     await interaction.followup.send(f"ʚ♡ɞ Your ticket has been created: {channel.mention}", ephemeral=True)
@@ -547,6 +550,10 @@ async def close_ticket(bot, channel: discord.TextChannel, ticket_id: int, closer
     embed = discord.Embed(title=CLOSED_TITLE, color=RED, timestamp=discord.utils.utcnow(),
                           description=f"Closed by {closer.mention}.{note}\nStaff can reopen or delete this ticket below.")
     await channel.send(embed=embed, view=ClosedView(bot))
+    try:
+        await vouch.send_prompt(bot, channel, ticket)      # separate vouch request (channel + DM)
+    except Exception:
+        log.exception("Vouch request failed")
 
 
 async def reopen_ticket(bot, channel: discord.TextChannel, ticket: dict, category, user: discord.Member) -> None:
