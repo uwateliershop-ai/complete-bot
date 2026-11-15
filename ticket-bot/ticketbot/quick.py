@@ -143,7 +143,7 @@ class QuickPanelModal(discord.ui.Modal):
         self.f_text = discord.ui.TextInput(
             label="Panel text (:emoji: {sticker:Name} ok)", style=discord.TextStyle.paragraph, required=False,
             max_length=TEXT_LIMIT, default=(old_text or "")[:TEXT_LIMIT] or None,
-            placeholder="· Read TOS in #rules\n· **OPEN** for orders & report :server_emoji:")
+            placeholder="· Read TOS in #rules\n· **OPEN** for tickets :server_emoji:")
         self.f_bar = discord.ui.TextInput(
             label="Bottom bar text (optional)", required=False, max_length=256,
             default=(bar_e.get("author_name") if bar_e.get("author_name") != "\u200b" else None) or None)
