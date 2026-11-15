@@ -29,7 +29,22 @@ CREATE TABLE IF NOT EXISTS guild_settings (
     autoreply_enabled INTEGER NOT NULL DEFAULT 1,   -- master switch for auto-responders
     nudge_message TEXT,
     idle_message TEXT,
+    vouch_channel_id INTEGER,
+    vouch_enabled INTEGER NOT NULL DEFAULT 1,       -- ask the ticket owner for a vouch when a ticket closes
+    vouch_message TEXT,
     ticket_counter INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS ticket_vouches (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    guild_id INTEGER NOT NULL,
+    ticket_id INTEGER NOT NULL UNIQUE REFERENCES tickets(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL,
+    rating INTEGER NOT NULL,
+    item TEXT,
+    staff_id INTEGER,
+    comment TEXT,
+    created_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS embed_templates (
@@ -260,7 +275,9 @@ class Database:
         gcols = {r["name"] for r in await self.fetchall("PRAGMA table_info(guild_settings)")}
         for name, ddl in (("unclaimed_minutes", "INTEGER NOT NULL DEFAULT 0"), ("idle_hours", "INTEGER NOT NULL DEFAULT 0"),
                           ("autoclose_hours", "INTEGER NOT NULL DEFAULT 0"), ("autoreply_enabled", "INTEGER NOT NULL DEFAULT 1"),
-                          ("nudge_message", "TEXT"), ("idle_message", "TEXT")):
+                          ("nudge_message", "TEXT"), ("idle_message", "TEXT"),
+                          ("vouch_channel_id", "INTEGER"), ("vouch_enabled", "INTEGER NOT NULL DEFAULT 1"),
+                          ("vouch_message", "TEXT")):
             if name not in gcols:
                 await self.conn.execute(f"ALTER TABLE guild_settings ADD COLUMN {name} {ddl}")
         bcols = {r["name"] for r in await self.fetchall("PRAGMA table_info(panel_buttons)")}
