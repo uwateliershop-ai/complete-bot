@@ -49,13 +49,13 @@ HELP_FIELDS = [
      "`/ticket transcript [number]` (staff) · make one here, or fetch a saved one"),
     ("⋆ Settings",
      "`/ticket settings` · roles, channels and limits at a glance\n"
-     "`/ticket dashboard` · change everything: embeds, buttons, forms, permissions, transcripts, general"),
-    ("⋆ Shop (orders, payment, deals, auto-replies)",
-     "`/shop setup` · shop name, order category, queue / vouch / updates / rules channels, pledge phrase\n"
-     "`/shop payment` · gcash / paypal / robux details · `/shop timers` · nudge, idle reminder, auto-close\n"
-     "`/shop reply-add|edit|list|toggle|remove` · keyword auto-replies\n"
-     "`/shop deal-add|edit|remove|list|slots|post` · deals with a live slots message\n"
-     "`/shop orders` · recent orders · `/shop settings` · overview"),
+     "`/ticket dashboard` · change everything: panels, embeds, buttons, auto-responders, forms, automation, permissions, transcripts, general"),
+    ("⋆ Cards, buttons & auto-responders",
+     "Build them in `/ticket dashboard`: **Panels & Cards** post an embed with buttons. A button can open a ticket, "
+     "open a link, send a reply (text and/or embed) or toggle a role.\n"
+     "**Auto-Responders** answer keywords with text, an embed card and buttons, in tickets or anywhere in the server.\n"
+     "**Automation** sets the staff nudge, idle reminder and auto-close.\n"
+     "`/ticket autoreplies` · list your auto-responders"),
     ("⋆ Inside a ticket",
      "**Staff:** Claim · Unclaim · Transfer · Close · Transcript · Add/Remove user · Rename\n"
      "**Closed:** Reopen · Transcript · Delete"),
