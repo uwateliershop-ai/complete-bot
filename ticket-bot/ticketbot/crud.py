@@ -11,7 +11,7 @@ import sqlite3
 
 import discord
 
-from . import media, panels
+from . import actions, autoresponder, media, panels
 from .entities import ENTITIES, Entity, Field, Picker, display_value, parse_field
 from .ui import BaseView, ConfirmView, show
 from .util import BLURPLE, RED, get_settings, jload, truncate
@@ -82,6 +82,8 @@ async def delete_row(bot, entity: Entity, row: dict) -> str | None:
 async def picker_display(bot, picker: Picker, value) -> str:
     if picker.kind == "roles":
         return " ".join(f"<@&{i}>" for i in jload(value)) or "—"
+    if picker.kind == "role":
+        return f"<@&{value}>" if value else "—"
     if picker.kind in ("channel", "category"):
         return f"<#{value}>" if value else "—"
     if picker.kind == "ref":
@@ -113,6 +115,15 @@ async def describe(bot, entity: Entity, row: dict) -> discord.Embed:
     if toggles:
         embed.add_field(name="Options", inline=False,
                         value="\n".join(f"{'ʚ♡ɞ' if row.get(k) else '⋆｡°✩'} {v}" for k, v in toggles.items()))
+    if entity.name in ("button", "ar_button"):
+        problem = actions.button_problem(row)
+        if problem:
+            embed.add_field(name="Needs attention", inline=False,
+                            value=f"This button won't work until you {problem}.")
+    if entity.name == "autoresponder":
+        n = (await bot.db.fetchone("SELECT COUNT(*) AS n FROM autoresponder_buttons WHERE responder_id = ?",
+                                   (row["id"],)))["n"]
+        embed.add_field(name="Buttons", inline=False, value=f"{n} · manage with the **Buttons** button below")
     if entity.name == "panel":
         if row["message_id"] and row["message_channel_id"]:
             status = f"Published in <#{row['message_channel_id']}>"
@@ -160,7 +171,7 @@ class RowModal(discord.ui.Modal):
                 data[f.key] = parse_field(f, raw)
             except ValueError as exc:
                 return await interaction.response.send_message(f"⋆｡°✩ **{f.label}**: {exc}", ephemeral=True)
-        if entity.name in ("button", "option") and "label" in data and not data.get("emoji"):
+        if entity.name in ("button", "ar_button", "option") and "label" in data and not data.get("emoji"):
             lead, label = media.split_leading_emoji(guild, data["label"] or "")
             if lead:                                          # "<emoji> Order" -> emoji slot + label "Order"
                 data["emoji"], data["label"] = lead, label
@@ -197,12 +208,14 @@ class RowModal(discord.ui.Modal):
 # Dashboard
 # ---------------------------------------------------------------------------
 SECTIONS = [
-    ("panels", "⋆", "Panel Management", "Create, edit, publish and delete panels"),
+    ("panels", "⋆", "Panels & Cards", "Post embed cards with buttons: tickets, links, replies, roles"),
     ("embeds", "⋆", "Embed Builder", "Customize embeds, images, fields and colors"),
-    ("buttons", "⋆", "Button Management", "Configure interactive ticket buttons"),
+    ("buttons", "⋆", "Button Management", "Ticket, link, reply and role buttons on a panel"),
     ("dropdowns", "⋆", "Dropdown Management", "Manage select menus and their options"),
+    ("autoresponders", "⋆", "Auto-Responders", "Keyword replies with text, embed cards and buttons"),
     ("categories", "⋆", "Category Management", "Manage ticket categories and staff roles"),
     ("forms", "⋆", "Form Management", "Create and edit ticket forms"),
+    ("automation", "⋆", "Automation", "Staff nudge, idle reminder, auto-close and their messages"),
     ("permissions", "⋆", "Permissions", "Manage staff roles and access permissions"),
     ("transcripts", "୨୧", "Transcript Settings", "Configure transcript generation and archives"),
     ("general", "⋆", "General Settings", "Manage general ticket behavior"),
@@ -243,11 +256,14 @@ async def section_screen(bot, user_id: int, guild_id: int, key: str) -> dict:
         return await parent_pick_screen(bot, user_id, guild_id, E["button"])
     if key == "dropdowns":
         return await parent_pick_screen(bot, user_id, guild_id, E["dropdown"])
+    if key == "autoresponders":
+        return await crud_screen(bot, user_id, guild_id, E["autoresponder"])
     if key == "categories":
         return await crud_screen(bot, user_id, guild_id, E["category"])
     if key == "forms":
         return await crud_screen(bot, user_id, guild_id, E["form"])
-    name = {"permissions": "permissions", "transcripts": "transcripts", "general": "general"}[key]
+    name = {"permissions": "permissions", "transcripts": "transcripts", "general": "general",
+            "automation": "automation"}[key]
     return await edit_screen(bot, user_id, guild_id, E[name], guild_id)
 
 
@@ -260,6 +276,7 @@ EXTRAS = {
     "embed": [("Fields", "⋆", "child:embed_field"), ("Preview", "⋆", "preview")],
     "dropdown": [("Options", "⋆", "child:option")],
     "form": [("Questions", "⋆", "child:question")],
+    "autoresponder": [("Buttons", "⋆", "child:ar_button"), ("Preview", "⋆", "preview")],
 }
 
 
@@ -361,7 +378,7 @@ class CrudView(BaseView):
         async def no(i: discord.Interaction):
             await self.go(i, selected_id=sel["id"])
 
-        extra = " Everything inside it will be deleted too." if e.name in ("panel", "embed", "dropdown", "form") else ""
+        extra = " Everything inside it will be deleted too." if e.name in ("panel", "embed", "dropdown", "form", "autoresponder") else ""
         embed = discord.Embed(title="Delete?", color=RED,
                               description=f"Delete **{truncate(row_label(e, sel), 100)}**? This cannot be undone.{extra}")
         await show(interaction, embeds=[embed], view=ConfirmView(interaction.user.id, yes, no, yes_label="Delete"))
@@ -398,6 +415,16 @@ class CrudView(BaseView):
             if key.startswith("child:"):
                 screen = await crud_screen(bot, self.user_id, interaction.guild_id, ENTITIES[key[6:]], parent_id=sel["id"])
                 return await show(interaction, **screen)
+            if key == "preview" and self.entity.name == "autoresponder":
+                guild, user = interaction.guild, interaction.user
+                kwargs = await autoresponder.render_reply(bot, sel, {
+                    "user": user.mention, "username": user.display_name, "server": guild.name, "shop": guild.name,
+                    "channel": getattr(interaction.channel, "mention", ""), "ticket": "0001"}, preview=True)
+                if not kwargs["content"] and not kwargs["embeds"]:
+                    return await interaction.response.send_message(
+                        "⋆｡°✩ Nothing to preview: add **Reply text** or pick an **embed card**.", ephemeral=True)
+                kwargs["content"] = "⋆ **Preview** (not sent; buttons are disabled here)\n" + (kwargs["content"] or "")
+                return await interaction.response.send_message(ephemeral=True, **kwargs)
             if key == "preview":
                 try:
                     embeds, view = await preview_for(bot, self.entity, sel)
@@ -523,6 +550,11 @@ async def picker_screen(bot, user_id: int, guild_id: int, entity: Entity, row: d
         component = discord.ui.RoleSelect(placeholder="Select roles…", min_values=0, max_values=25,
                                           default_values=defaults, row=0)
         extract = lambda: json.dumps([r.id for r in component.values])
+    elif picker.kind == "role":
+        defaults = [discord.Object(id=current, type=discord.Role)] if current else []
+        component = discord.ui.RoleSelect(placeholder="Select a role…", min_values=1, max_values=1,
+                                          default_values=defaults, row=0)
+        extract = lambda: component.values[0].id
     elif picker.kind == "channel":
         component = discord.ui.ChannelSelect(placeholder="Select a channel…", min_values=1, max_values=1, row=0,
                                              channel_types=[discord.ChannelType.text, discord.ChannelType.news])
