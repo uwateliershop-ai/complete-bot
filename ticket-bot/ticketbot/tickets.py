@@ -19,7 +19,6 @@ ACTION_LABELS = {
     "ticket_transferred": "Ticket Transferred", "user_added": "User Added", "user_removed": "User Removed",
     "ticket_renamed": "Ticket Renamed", "ticket_closed": "Ticket Closed", "ticket_reopened": "Ticket Reopened",
     "ticket_deleted": "Ticket Deleted",
-    "order_lined_up": "Order Lined Up", "order_processing": "Order Processing", "order_done": "Order Done",
 }
 
 
@@ -211,11 +210,6 @@ async def create_ticket(interaction: discord.Interaction, bot, category: dict, p
         await channel.send(content=mentions, embed=embed, view=TicketControlView(bot))   # without the stickers
     await log_event(bot, guild, ticket, "ticket_created", user.id,
                     f"Category: {category['name']} | Channel: #{channel.name}")
-    try:                                               # shop order flow (pledge -> form -> payment -> queue)
-        from . import orders
-        await orders.on_ticket_created(bot, channel, ticket, category, user, answers)
-    except Exception:
-        log.exception("Order flow failed to start")
     await interaction.followup.send(f"ʚ♡ɞ Your ticket has been created: {channel.mention}", ephemeral=True)
 
 
