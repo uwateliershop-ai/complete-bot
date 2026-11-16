@@ -1,6 +1,6 @@
-"""Admin & staff slash commands that complement /ticket quickpanel and /ticket dashboard.
+"""Admin & staff slash commands that complement /quickpanel and /dashboard.
 
-Panels   (admin)  : /ticket panels · publish · unpublish
+Panels   (admin)  : /panels · publish · unpublish
 Settings (admin)  : /ticket settings
 Tickets  (admin)  : /ticket list
 Tickets  (staff)  : /ticket info · close · reopen · delete     (number optional inside a ticket channel)
@@ -77,8 +77,9 @@ async def strip_closed_buttons(bot, channel: discord.TextChannel) -> None:
     me = getattr(bot, "user", None)
     try:
         async for message in channel.history(limit=50):
-            if (me is not None and message.author.id == me.id and message.embeds
-                    and message.embeds[0].title == tickets.CLOSED_TITLE):
+            if (me is not None and message.author.id == me.id
+                    and any(getattr(c, "custom_id", None) == "tb:t:reopen"
+                            for row in message.components for c in getattr(row, "children", []))):
                 await message.edit(view=None)
                 return
     except discord.HTTPException:
@@ -92,11 +93,11 @@ async def publish_panel(bot, guild: discord.Guild, panel: dict, channel=None) ->
     """(Re)post a saved panel: its pictures first, then the panel itself. The previous copy is only removed once
     the new one is up."""
     if is_quick(panel) and channel is not None and channel.id != (panel["channel_id"] or 0):
-        return (f"{ERR} Quick panels stay in their own channel. To move it, run `/ticket quickpanel` "
+        return (f"{ERR} Quick panels stay in their own channel. To move it, run `/quickpanel` "
                 f"in the new channel.")
     target = channel or guild.get_channel(panel["channel_id"] or 0)
     if not isinstance(target, discord.abc.Messageable):
-        return f"{ERR} This panel has no destination channel. Pass `channel`, or set one in `/ticket dashboard`."
+        return f"{ERR} This panel has no destination channel. Pass `channel`, or set one in `/dashboard`."
     return await panels.publish(bot, guild, panel["id"], channel)
 
 
@@ -110,7 +111,7 @@ async def unpublish_panel(bot, panel: dict, label: str) -> str:
                                                 "decor_message_id": None, "image_message_ids": "[]"})
     note = "" if reachable else (f"\n{ERR} I couldn't reach the old message's channel. "
                                  "Delete the message by hand if it is still there.")
-    return f"{OK} **{label}** unpublished. Settings kept. Use `/ticket publish` to post it again.{note}"
+    return f"{OK} **{label}** unpublished. Settings kept. Use `/publish` to post it again.{note}"
 
 
 def make_panel_autocomplete(bot):
@@ -132,7 +133,9 @@ def make_panel_autocomplete(bot):
 # ---------------------------------------------------------------------------
 # Command registration
 # ---------------------------------------------------------------------------
-def add_admin_commands(bot, group: app_commands.Group, admin_gate) -> None:
+def add_admin_commands(bot, group: app_commands.Group, admin_gate, root=None) -> None:
+    """`group` = /ticket (ticket commands); `root` = the command tree (panel commands live at top level)."""
+    root = root or group
     db = bot.db
     panel_autocomplete = make_panel_autocomplete(bot)
 
@@ -156,7 +159,7 @@ def add_admin_commands(bot, group: app_commands.Group, admin_gate) -> None:
         return ticket, category, settings
 
     # ---- panels ----------------------------------------------------------
-    @group.command(name="panels", description="List every ticket panel and where it is posted.")
+    @root.command(name="panels", description="List every ticket panel and where it is posted.")
     async def list_panels(interaction: discord.Interaction):
         if not await admin_gate(interaction, bot):
             return
@@ -164,7 +167,7 @@ def add_admin_commands(bot, group: app_commands.Group, admin_gate) -> None:
         rows = await db.where("panels", order="id", guild_id=guild.id)
         embed = discord.Embed(title="୨୧ Ticket panels", color=BLURPLE)
         if not rows:
-            embed.description = "No panels yet. Run `/ticket quickpanel` to create one."
+            embed.description = "No panels yet. Run `/quickpanel` to create one."
             return await interaction.response.send_message(embed=embed, ephemeral=True)
         lines = []
         for index, row in enumerate(rows, start=1):
@@ -189,10 +192,10 @@ def add_admin_commands(bot, group: app_commands.Group, admin_gate) -> None:
                 break
             lines.append(line)
         embed.description = "\n".join(lines)
-        embed.set_footer(text=f"Showing {len(lines)} of {len(rows)} • /ticket publish posts or re-posts a panel")
+        embed.set_footer(text=f"Showing {len(lines)} of {len(rows)} • /publish posts or re-posts a panel")
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    @group.command(name="publish", description="Post (or re-post) a saved panel. The old message is replaced.")
+    @root.command(name="publish", description="Post (or re-post) a saved panel. The old message is replaced.")
     @app_commands.describe(panel="Which panel to post",
                            channel="Where to post it (default: the panel's own channel)")
     @app_commands.autocomplete(panel=panel_autocomplete)
@@ -202,15 +205,15 @@ def add_admin_commands(bot, group: app_commands.Group, admin_gate) -> None:
         row = await resolve_panel(bot, interaction.guild, panel)
         if row is None:
             return await interaction.response.send_message(
-                f"{ERR} I couldn't find that panel. Pick one from the list, or see `/ticket panels`.", ephemeral=True)
+                f"{ERR} I couldn't find that panel. Pick one from the list, or see `/panels`.", ephemeral=True)
         await interaction.response.defer(ephemeral=True, thinking=True)
         status = await publish_panel(bot, interaction.guild, row, channel)
         if status.startswith(OK) and not row["enabled"]:
             status += (f"\n{ERR} This panel is **disabled**, so its menu is greyed out. "
-                       "Enable it in `/ticket dashboard` → Panel Management.")
+                       "Enable it in `/dashboard` → Panel Management.")
         await interaction.followup.send(status, ephemeral=True)
 
-    @group.command(name="unpublish", description="Take a panel down but keep all of its settings.")
+    @root.command(name="unpublish", description="Take a panel down but keep all of its settings.")
     @app_commands.describe(panel="Which panel to take down")
     @app_commands.autocomplete(panel=panel_autocomplete)
     async def unpublish(interaction: discord.Interaction, panel: str):
@@ -219,7 +222,7 @@ def add_admin_commands(bot, group: app_commands.Group, admin_gate) -> None:
         row = await resolve_panel(bot, interaction.guild, panel)
         if row is None:
             return await interaction.response.send_message(
-                f"{ERR} I couldn't find that panel. Pick one from the list, or see `/ticket panels`.", ephemeral=True)
+                f"{ERR} I couldn't find that panel. Pick one from the list, or see `/panels`.", ephemeral=True)
         await interaction.response.defer(ephemeral=True, thinking=True)
         await interaction.followup.send(
             await unpublish_panel(bot, row, panel_label(interaction.guild, row)), ephemeral=True)
@@ -266,25 +269,25 @@ def add_admin_commands(bot, group: app_commands.Group, admin_gate) -> None:
         open_n = await _count(db, "SELECT COUNT(*) AS n FROM tickets WHERE guild_id = ? AND status = 'open'", (gid,))
         embed.add_field(name="Totals", inline=False,
                         value=f"{panels_n} panels · {cats_n} categories · {forms_n} forms · {open_n} open tickets")
-        embed.set_footer(text="Change these in /ticket dashboard")
+        embed.set_footer(text="Change these in /dashboard")
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     # ---- auto-responders ----------------------------------------------------
-    @group.command(name="autoreplies", description="List the auto-responders and where they work.")
+    @root.command(name="autoreplies", description="List the auto-responders and where they work.")
     async def autoreplies_command(interaction: discord.Interaction):
         if not await admin_gate(interaction, bot):
             return
         rows = await db.where("autoresponders", order="id", guild_id=interaction.guild_id)
         if not rows:
             return await interaction.response.send_message(
-                "No auto-responders yet. Create one in `/ticket dashboard` → **Auto-Responders**.", ephemeral=True)
+                "No auto-responders yet. Create one in `/dashboard` → **Auto-Responders**.", ephemeral=True)
         lines = []
         for r in rows:
             where = "tickets" if r["scope"] == "tickets" else (f"<#{r['channel_id']}>" if r["channel_id"] else "server")
             lines.append(f"{'ʚ♡ɞ' if r['enabled'] else '⋆｡°✩'} **{truncate(r['name'], 40)}** · {where} · "
                          f"`{truncate(r['trigger'], 60)}`")
         embed = discord.Embed(title="⋆ Auto-responders", description=truncate("\n".join(lines), 4000), color=BLURPLE)
-        embed.set_footer(text="Edit them in /ticket dashboard → Auto-Responders")
+        embed.set_footer(text="Edit them in /dashboard → Auto-Responders")
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     # ---- ticket overview ---------------------------------------------------
