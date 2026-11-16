@@ -1,5 +1,6 @@
-"""Slash commands under /ticket. Panel/ticket/settings commands live in admin.py and quick.py; deep configuration
-lives in /ticket dashboard."""
+"""Slash commands. Setup commands are top level (/dashboard /embed /quickpanel /boxpanel /panels /publish /image /post
+/queue ...); ticket actions stay under /ticket (close, reopen, delete, info, list, transcript, settings, help).
+Deep configuration lives in /dashboard."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -8,7 +9,7 @@ from typing import Optional
 import discord
 from discord import app_commands
 
-from . import admin, crud, images, post, quick, transcripts
+from . import admin, crud, images, orderflow, post, quick, transcripts
 from .util import BLURPLE, get_settings, is_admin, is_staff
 
 
@@ -22,40 +23,41 @@ async def admin_gate(interaction: discord.Interaction, bot) -> bool:
 
 HELP_FIELDS = [
     ("⋆ 1 · Set up a panel",
-     "`/ticket quickpanel` builds and posts a whole panel from one form. Options: `channel` · `banner` (picture links) "
-     "· `thumbnail` · `staff_role` · `ticket_folder`.\n"
-     "Run it again in the same channel to edit: the form comes back filled in."),
-    ("⋆ The quickpanel form",
-     "**Panel text** (plain message above the dropdown) · **Bottom bar** (optional small embed) · **Placeholder**\n"
+     "`/quickpanel` builds and posts a whole panel from one form. `/boxpanel` does the same, but everything sits "
+     "inside one box. Options: `channel` · `banner` (picture links) · `thumbnail` · `staff_role` · `ticket_folder`.\n"
+     "Run it again in the same channel to edit: the form comes back filled in. Switch a panel between classic and box "
+     "in `/dashboard` → Panels & Cards → Basics → Layout."),
+    ("⋆ The panel form",
+     "**Panel text** · **Bottom bar** (optional) · **Placeholder**\n"
      "**Categories**, one per line: `Label | description | symbol | question ; question+`\n"
      "Max 5 questions, `+` = long answer, none = no form.\n"
      "Example: `Order | Buy something | :server_emoji: | What are you buying? ; Details+`"),
     ("⋆ 2 · Pictures & GIFs (any number)",
-     "`/ticket image add` · one per run: a `link` or an uploaded `file`, optional `position`\n"
-     "`/ticket image bulk` · many at once, one link per line\n"
-     "`/ticket image list` · `remove <number>` · `clear`\n"
-     "`/ticket imageurl` · upload a picture, get a link for any link box\n"
-     "`panel` can be left out in a quick panel's channel."),
+     "`/image add` · one per run: a `link` or an uploaded `file`, optional `position`\n"
+     "`/image bulk` · many at once, one link per line\n"
+     "`/image list` · `remove <number>` · `clear`\n"
+     "`/imageurl` · upload a picture, get a link for any link box"),
     ("⋆ 3 · Plain messages, emojis, stickers",
-     "`/ticket post` · the bot posts a normal message (no embed), with optional files.\n"
-     "Type `:name:` for a server emoji and `{sticker:Name}` for a server sticker (max 3) in panel text, "
-     "embeds, welcome messages and `/ticket post`. `:name:` also works in a button/option emoji box."),
+     "`/post` · the bot posts a normal message (no embed), with optional files.\n"
+     "Type `:name:` for a server emoji (and `{sticker:Name}` for a sticker, max 3) in **every** text the bot sends: "
+     "panels, embeds, welcome / close / claim messages, order and queue messages, vouches, transcripts, auto-replies, "
+     "`/post`. `:name:` also works in button and option emoji boxes."),
     ("⋆ Manage panels",
-     "`/ticket panels` · list panels · `/ticket publish` · post or re-post (old one replaced) · "
-     "`/ticket unpublish` · take down, keep settings"),
+     "`/dashboard` · everything · `/embed` · the embed builder · `/panels` · list panels · `/publish` · post or re-post · "
+     "`/unpublish` · take down, keep settings"),
+    ("⋆ Orders & queue",
+     "Turn on **Order flow** for a category in `/dashboard` → Ticket Categories. The buyer confirms their order "
+     "(before), gets a confirmation (after), staff move it through the queue.\n"
+     "Edit all texts and stages in `/dashboard` → **Order Confirmation** and **Queue** (or `/queue settings`).\n"
+     "`/queue board` · live board · `/queue list` · who is waiting"),
     ("⋆ Manage tickets",
      "`/ticket list` · newest first, filter by `status` or `user`\n"
      "`/ticket info` · `close` · `reopen` · `delete` (staff): pass the ticket `number`, or leave it out inside the ticket\n"
-     "`/ticket transcript [number]` (staff) · make one here, or fetch a saved one"),
-    ("⋆ Settings",
-     "`/ticket settings` · roles, channels and limits at a glance\n"
-     "`/ticket dashboard` · change everything: panels, embeds, buttons, auto-responders, forms, automation, permissions, transcripts, general"),
-    ("⋆ Cards, buttons & auto-responders",
-     "Build them in `/ticket dashboard`: **Panels & Cards** post an embed with buttons. A button can open a ticket, "
-     "open a link, send a reply (text and/or embed) or toggle a role.\n"
-     "**Auto-Responders** answer keywords with text, an embed card and buttons, in tickets or anywhere in the server.\n"
-     "**Automation** sets the staff nudge, idle reminder and auto-close.\n"
-     "`/ticket autoreplies` · list your auto-responders"),
+     "`/ticket transcript [number]` (staff) · make one here, or fetch a saved one\n"
+     "`/ticket settings` · roles, channels and limits at a glance"),
+    ("⋆ Everything editable in Discord",
+     "`/dashboard` → Panels & Cards · Embed Templates · Buttons · Dropdowns · Auto-Responders · Forms · Automation · "
+     "**Messages** · **Order Confirmation** · **Queue** · Vouch Settings · Transcript Settings · Permissions · General."),
     ("⋆ Inside a ticket",
      "**Staff:** Claim · Unclaim · Transfer · Close · Transcript · Add/Remove user · Rename\n"
      "**Closed:** Reopen · Transcript · Delete"),
@@ -67,7 +69,9 @@ HELP_FIELDS = [
 
 
 def build_group(bot) -> app_commands.Group:
-    ticket = app_commands.Group(name="ticket", description="Ticket system", guild_only=True)
+    """Registers the top-level setup commands on the tree and returns the /ticket group (not yet added)."""
+    tree = bot.tree
+    ticket = app_commands.Group(name="ticket", description="Ticket actions", guild_only=True)
 
     @ticket.command(name="help", description="Admin guide to every ticket command.")
     async def help_command(interaction: discord.Interaction):
@@ -81,17 +85,26 @@ def build_group(bot) -> app_commands.Group:
             embed.add_field(name=name, value=value, inline=False)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    @ticket.command(name="dashboard", description="Open the configuration dashboard.")
+    @tree.command(name="dashboard", description="Open the configuration dashboard.")
+    @app_commands.guild_only()
     async def dashboard(interaction: discord.Interaction):
         if await admin_gate(interaction, bot):
             screen = await crud.dashboard_screen(bot, interaction.user.id, interaction.guild_id)
             await interaction.response.send_message(ephemeral=True, **screen)
 
-    quick.add_quick_command(bot, ticket, admin_gate)
-    admin.add_admin_commands(bot, ticket, admin_gate)
-    images.add_image_commands(bot, ticket, admin_gate)
-    post.add_post_command(bot, ticket, admin_gate)
-    post.add_imageurl_command(bot, ticket, admin_gate)
+    @tree.command(name="embed", description="Open the embed builder (create and edit embeds).")
+    @app_commands.guild_only()
+    async def embed_builder(interaction: discord.Interaction):
+        if await admin_gate(interaction, bot):
+            screen = await crud.section_screen(bot, interaction.user.id, interaction.guild_id, "embeds")
+            await interaction.response.send_message(ephemeral=True, **screen)
+
+    quick.add_quick_command(bot, tree, admin_gate)
+    admin.add_admin_commands(bot, ticket, admin_gate, root=tree)
+    images.add_image_commands(bot, tree, admin_gate)
+    post.add_post_command(bot, tree, admin_gate)
+    post.add_imageurl_command(bot, tree, admin_gate)
+    orderflow.add_queue_commands(bot, tree, admin_gate)
 
     @ticket.command(name="transcript", description="Generate a transcript here, or retrieve a saved one by number.")
     @app_commands.describe(number="Ticket number to retrieve (leave empty inside a ticket to generate a new one)")
@@ -124,4 +137,6 @@ def build_group(bot) -> app_commands.Group:
         await interaction.response.send_message(f"୨୧ Latest transcript for ticket #{number:04d}:",
                                                 file=discord.File(record["file_path"]), ephemeral=True)
 
+    for cmd in tree.get_commands():                      # every command works in servers only
+        cmd.guild_only = True
     return ticket
