@@ -35,6 +35,21 @@ CREATE TABLE IF NOT EXISTS guild_settings (
     ticket_counter INTEGER NOT NULL DEFAULT 0
 );
 
+CREATE TABLE IF NOT EXISTS ticket_orders (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    guild_id INTEGER NOT NULL,
+    ticket_id INTEGER NOT NULL UNIQUE REFERENCES tickets(id) ON DELETE CASCADE,
+    code TEXT NOT NULL,
+    owner_id INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',        -- pending | queued | processing | done
+    confirm_message_id INTEGER,
+    form_message_id INTEGER,
+    queue_channel_id INTEGER,
+    queue_message_id INTEGER,
+    handled_by INTEGER,
+    created_at TEXT NOT NULL, confirmed_at TEXT, done_at TEXT
+);
+
 CREATE TABLE IF NOT EXISTS ticket_vouches (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     guild_id INTEGER NOT NULL,
@@ -119,7 +134,7 @@ CREATE TABLE IF NOT EXISTS panel_images (
     panel_id INTEGER NOT NULL REFERENCES panels(id) ON DELETE CASCADE,
     url TEXT,                                     -- picture / GIF link
     file_path TEXT,                               -- our own copy of an uploaded picture
-    label TEXT,                                   -- original file name of an upload (for /ticket image list)
+    label TEXT,                                   -- original file name of an upload (for /image list)
     kind TEXT NOT NULL DEFAULT 'image',           -- image | link (Tenor/Giphy page) | file
     position INTEGER NOT NULL DEFAULT 0
 );
@@ -243,6 +258,18 @@ CREATE TABLE IF NOT EXISTS autoresponder_buttons (
 """
 
 
+NEW_SETTING_COLUMNS = tuple((name, "TEXT") for name in (
+    "msg_created", "form_title", "msg_claim", "msg_unclaim", "msg_reopen", "msg_close_title", "msg_close_text",
+    "msg_delete", "tr_title", "tr_footer", "tr_theme", "tr_archive_title", "tr_archive_text",
+    "order_before_title", "order_before_text", "order_yes_label", "order_edit_label", "order_after_title",
+    "order_after_text", "queue_title", "queue_text", "queue_btn_processing", "queue_btn_done", "stage_queued",
+    "stage_processing", "stage_done", "queue_update_text", "board_title", "board_text")) + (
+    ("tr_color", "INTEGER"), ("tr_show_form", "INTEGER NOT NULL DEFAULT 1"),
+    ("tr_show_log", "INTEGER NOT NULL DEFAULT 1"), ("tr_show_meta", "INTEGER NOT NULL DEFAULT 1"),
+    ("tr_dm_owner", "INTEGER NOT NULL DEFAULT 0"), ("queue_channel_id", "INTEGER"),
+    ("queue_dm", "INTEGER NOT NULL DEFAULT 1"), ("board_channel_id", "INTEGER"), ("board_message_id", "INTEGER"))
+
+
 class Database:
     def __init__(self, path: str):
         self.path = path
@@ -277,9 +304,15 @@ class Database:
                           ("autoclose_hours", "INTEGER NOT NULL DEFAULT 0"), ("autoreply_enabled", "INTEGER NOT NULL DEFAULT 1"),
                           ("nudge_message", "TEXT"), ("idle_message", "TEXT"),
                           ("vouch_channel_id", "INTEGER"), ("vouch_enabled", "INTEGER NOT NULL DEFAULT 1"),
-                          ("vouch_message", "TEXT")):
+                          ("vouch_message", "TEXT")) + NEW_SETTING_COLUMNS:
             if name not in gcols:
                 await self.conn.execute(f"ALTER TABLE guild_settings ADD COLUMN {name} {ddl}")
+        pcols2 = {r["name"] for r in await self.fetchall("PRAGMA table_info(panels)")}
+        if "layout" not in pcols2:
+            await self.conn.execute("ALTER TABLE panels ADD COLUMN layout TEXT NOT NULL DEFAULT 'classic'")
+        ccols = {r["name"] for r in await self.fetchall("PRAGMA table_info(categories)")}
+        if "is_order" not in ccols:
+            await self.conn.execute("ALTER TABLE categories ADD COLUMN is_order INTEGER NOT NULL DEFAULT 0")
         bcols = {r["name"] for r in await self.fetchall("PRAGMA table_info(panel_buttons)")}
         for name, ddl in (("url", "TEXT"), ("reply_text", "TEXT"),
                           ("reply_embed_id", "INTEGER REFERENCES embed_templates(id) ON DELETE SET NULL"),
