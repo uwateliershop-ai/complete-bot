@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from pathlib import Path
 
 import discord
 
@@ -141,6 +142,95 @@ async def render_panel(bot, panel: dict, *, preview: bool = False):
     return embeds, view
 
 
+
+# ---------------------------------------------------------------------------
+# Box layout: everything inside one rounded "box" (Discord container)
+# ---------------------------------------------------------------------------
+def is_box(panel: dict) -> bool:
+    return (panel.get("layout") or "classic") == "box"
+
+
+async def render_box(bot, panel: dict, *, preview: bool = False):
+    """One container holding pictures, text, a divider, then the dropdown and buttons.
+    Returns (LayoutView, files, notes). Text comes from the panel text, its embed templates and its pictures,
+    so everything is still edited with the same dashboard / `/image` tools."""
+    db = bot.db
+    guild = media.guild_for(bot, panel.get("guild_id"))
+    files: list[discord.File] = []
+    notes: list[str] = []
+    gallery: list[discord.MediaGalleryItem] = []
+    if panel.get("image_url"):
+        gallery.append(discord.MediaGalleryItem(panel["image_url"]))
+    for number, img in enumerate(await media.list_images(db, panel["id"]), start=1):
+        if img["kind"] == "file":
+            path = Path(img["file_path"] or "")
+            if not path.is_file():
+                notes.append(f"Picture {number} was skipped: its saved file is missing.")
+                continue
+            name = f"image-{img['id']}{path.suffix}"
+            files.append(discord.File(str(path), filename=name))
+            gallery.append(discord.MediaGalleryItem(f"attachment://{name}"))
+        elif img["kind"] == "link":
+            notes.append(f"Picture {number} is a Tenor/Giphy page link, which a box can't show. Use a direct .gif link or upload it.")
+        else:
+            gallery.append(discord.MediaGalleryItem(img["url"]))
+
+    blocks: list[str] = []
+    if panel.get("content"):
+        blocks.append(_rich(guild, panel["content"]))
+    after_text: list[discord.MediaGalleryItem] = []
+    for eid in jload(panel["embed_ids"])[:10]:
+        tpl = await db.get("embed_templates", eid)
+        if not tpl:
+            continue
+        lines = []
+        if tpl["author_name"] and tpl["author_name"] != media.ZWSP:
+            lines.append(f"-# {_rich(guild, tpl['author_name'])}")
+        if tpl["title"]:
+            lines.append(f"## {_rich(guild, tpl['title'])}")
+        if tpl["description"]:
+            lines.append(_rich(guild, tpl["description"]))
+        for f in await db.where("embed_fields", order="position, id", embed_id=tpl["id"]):
+            lines.append(f"**{_rich(guild, f['name'])}**\n{_rich(guild, f['value'])}")
+        if tpl["footer_text"]:
+            lines.append(f"-# {_rich(guild, tpl['footer_text'])}")
+        if lines:
+            blocks.append("\n".join(lines))
+        if tpl["image_url"]:
+            after_text.append(discord.MediaGalleryItem(tpl["image_url"]))
+    if not blocks and not gallery and not after_text:
+        title = _rich(guild, panel["title"]) or panel["name"]
+        blocks.append(f"## {title}" + (f"\n{_rich(guild, panel['description'])}" if panel["description"] else ""))
+
+    children: list = []
+    if gallery:
+        children.append(discord.ui.MediaGallery(*gallery[:10]))
+    if blocks:
+        children.append(discord.ui.TextDisplay(truncate("\n\n".join(blocks), 3800)))
+    if after_text:
+        children.append(discord.ui.MediaGallery(*after_text[:10]))
+
+    buttons = [b for b in await db.where("panel_buttons", order="position, id", panel_id=panel["id"]) if b["enabled"]]
+    dropdowns = [d for d in await db.where("panel_dropdowns", order="position, id", panel_id=panel["id"]) if d["enabled"]]
+    disabled = not panel["enabled"]
+    rows: list = []
+    for d in dropdowns:
+        opts = [o for o in await db.where("dropdown_options", order="position, id", dropdown_id=d["id"]) if o["enabled"]]
+        if opts:
+            rows.append(discord.ui.ActionRow(PanelSelect(bot, d, opts, 0, preview, disabled)))
+    for i in range(0, len(buttons), 5):
+        rows.append(discord.ui.ActionRow(*[PanelButton(bot, b, 0, preview, disabled) for b in buttons[i:i + 5]]))
+    if rows:
+        children.append(discord.ui.Separator())
+        children.extend(rows)
+    if not children:
+        raise ValueError("This box is empty. Add text, a picture, buttons or a dropdown.")
+    color = panel["color"] if panel.get("color") is not None else None
+    view = discord.ui.LayoutView(timeout=600 if preview else None)
+    view.add_item(discord.ui.Container(*children, accent_colour=color))
+    return view, files, notes
+
+
 # ---------------------------------------------------------------------------
 # Publishing / syncing
 # ---------------------------------------------------------------------------
@@ -211,6 +301,8 @@ async def _publish(bot, guild, panel_id: int, channel) -> str:
     target = guild.get_channel(panel["channel_id"] or 0)
     if not isinstance(target, discord.abc.Messageable):
         return "⋆｡°✩ Pick a destination channel for this panel first (Edit → Destination channel)."
+    if is_box(panel):
+        return await _publish_box(bot, panel_id, panel, target)
     try:
         embeds, view = await render_panel(bot, panel)
     except ValueError as exc:
@@ -256,6 +348,21 @@ async def _publish(bot, guild, panel_id: int, channel) -> str:
     return "\n".join([f"ʚ♡ɞ Panel published in {target.mention}.", *notes])
 
 
+async def _publish_box(bot, panel_id: int, panel: dict, target) -> str:
+    try:
+        view, files, notes = await render_box(bot, panel)
+        message = await target.send(view=view, files=files)
+    except ValueError as exc:
+        return f"⋆｡°✩ {exc}"
+    except discord.HTTPException as exc:
+        return f"⋆｡°✩ Discord rejected the box: {truncate(getattr(exc, 'text', exc), 300)}"
+    await delete_published(bot, panel)
+    await bot.db.update("panels", panel_id, {"message_id": message.id, "message_channel_id": target.id,
+                                             "decor_message_id": None, "image_message_ids": "[]"})
+    bot.add_view(view, message_id=message.id)
+    return "\n".join([f"ʚ♡ɞ Box panel published in {target.mention}.", *(f"⋆｡°✩ {n}" for n in notes)])
+
+
 async def affected_panels(bot, entity, row: dict) -> list[int]:
     """Which *published* panels need refreshing after `row` of `entity` changed."""
     db = bot.db
@@ -285,6 +392,11 @@ async def sync(bot, panel_ids: list[int]) -> str | None:
         if channel is None:
             continue
         try:
+            if is_box(panel):
+                view, _files, _notes = await render_box(bot, panel)
+                await channel.get_partial_message(panel["message_id"]).edit(view=view)
+                bot.add_view(view, message_id=panel["message_id"])
+                continue
             embeds, view = await render_panel(bot, panel)
             text = media.rich_text(getattr(channel, "guild", None), panel.get("content")).text or None
             if not text and not embeds:
@@ -304,7 +416,10 @@ async def register_panel_views(bot) -> None:
     """Re-attach every published panel's components after a restart (persistent views)."""
     for panel in await bot.db.fetchall("SELECT * FROM panels WHERE message_id IS NOT NULL"):
         try:
-            _, view = await render_panel(bot, panel)
+            if is_box(panel):
+                view, _files, _notes = await render_box(bot, panel)
+            else:
+                _, view = await render_panel(bot, panel)
             if view is not None:
                 bot.add_view(view, message_id=panel["message_id"])
         except Exception:
