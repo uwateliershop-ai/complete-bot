@@ -1,9 +1,9 @@
-"""One-step panel setup:  /ticket quickpanel
+"""One-step panel setup:  /quickpanel  (classic)  and  /boxpanel  (everything inside one box)
 
 A single form builds the images, text, bottom bar and the dropdown of ticket categories, and posts them
 in the same order as a classic ticket panel:
 
-    [ picture ] [ picture ] ...  <- any number of pictures / GIFs, 10 per message (see /ticket image)
+    [ picture ] [ picture ] ...  <- any number of pictures / GIFs, 10 per message (see /image)
     plain text lines             <- normal message text, no card around it (:emoji: and {sticker:Name} work)
     [ bottom bar ]               <- small embed with icon + decorative line
     [ Select a topic...  v ]     <- the dropdown, one option per ticket category
@@ -132,9 +132,10 @@ async def _sync_form(db, guild_id: int, category_id: int, questions: list[tuple[
 
 
 class QuickPanelModal(discord.ui.Modal):
-    def __init__(self, bot, channel: discord.TextChannel, *, images, thumbnail, staff_role, ticket_folder, old: dict):
-        super().__init__(title="Ticket panel")
-        self.bot, self.channel = bot, channel
+    def __init__(self, bot, channel: discord.TextChannel, *, images, thumbnail, staff_role, ticket_folder, old: dict,
+                 layout: str = "classic"):
+        super().__init__(title="Box panel" if layout == "box" else "Ticket panel")
+        self.bot, self.channel, self.layout = bot, channel, layout
         self.images, self.thumbnail = list(images or []), thumbnail
         self.staff_role, self.ticket_folder = staff_role, ticket_folder
         bar_e = old.get("bar") or {}
@@ -171,7 +172,7 @@ class QuickPanelModal(discord.ui.Modal):
             error = "The panel is empty. Add some text or an image."
         if error:
             return await interaction.response.send_message(
-                f"⋆｡°✩ {error}\nRun `/ticket quickpanel` again to retry.", ephemeral=True)
+                f"⋆｡°✩ {error}\nRun `/{'boxpanel' if self.layout == 'box' else 'quickpanel'}` again to retry.", ephemeral=True)
 
         await interaction.response.defer(ephemeral=True, thinking=True)
         bot, db, guild, channel = self.bot, self.bot.db, interaction.guild, self.channel
@@ -191,7 +192,8 @@ class QuickPanelModal(discord.ui.Modal):
                   if (bar_text or bar_icon) else None)
 
         panel_id = await db.insert("panels", {
-            "guild_id": guild.id, "name": key, "color": DARK, "channel_id": channel.id,
+            "guild_id": guild.id, "name": key, "color": None if self.layout == "box" else DARK,
+            "layout": self.layout, "channel_id": channel.id,
             "thumbnail_url": self.thumbnail, "embed_ids": json.dumps([bar_id] if bar_id else []),
             "content": text or None})
         for pos, img in enumerate(self.images):              # pictures survive a re-run of the form
@@ -229,8 +231,9 @@ class QuickPanelModal(discord.ui.Modal):
             settings = await get_settings(bot, guild.id)
 
         message = await panels.publish(bot, guild, panel_id, channel)
-        notes = [message, "To change anything later, run `/ticket quickpanel` in the same channel again. "
-                          "The form will be pre-filled."]
+        cmd = "boxpanel" if self.layout == "box" else "quickpanel"
+        notes = [message, f"To change anything later, run `/{cmd}` in the same channel again (the form is pre-filled), "
+                          "or use `/dashboard` → Panels & Cards."]
         if not jload(settings["staff_role_ids"]):
             notes.append("⋆｡°✩ No staff role is set yet, so only admins can see tickets. "
                          "Run the command again and fill in the `staff_role` option.")
@@ -246,18 +249,26 @@ class QuickPanelModal(discord.ui.Modal):
             await interaction.response.send_message(msg, ephemeral=True)
 
 
-def add_quick_command(bot, group: app_commands.Group, admin_gate) -> None:
-    @group.command(name="quickpanel", description="Build and publish a complete ticket panel from one form.")
+def add_quick_command(bot, group, admin_gate) -> None:
+    for name, layout, description in (
+            ("quickpanel", "classic", "Build and publish a complete ticket panel from one form."),
+            ("boxpanel", "box", "Build a ticket panel where everything sits inside one box.")):
+        _register(bot, group, admin_gate, name, layout, description)
+
+
+def _register(bot, group, admin_gate, name: str, layout: str, description: str) -> None:
+    @group.command(name=name, description=description)
+    @app_commands.guild_only()
     @app_commands.describe(
         channel="Where the panel is posted",
-        banner="Picture / GIF links, separated by spaces (optional). More later: /ticket image add",
+        banner="Picture / GIF links, separated by spaces (optional). More later: /image add",
         thumbnail="Small image link shown on the right of the first picture (optional)",
         staff_role="Role that can see and manage tickets (optional)",
         ticket_folder="Discord category (folder) where new ticket channels are created (optional)")
-    async def quickpanel(interaction: discord.Interaction, channel: discord.TextChannel,
-                         banner: Optional[str] = None, thumbnail: Optional[str] = None,
-                         staff_role: Optional[discord.Role] = None,
-                         ticket_folder: Optional[discord.CategoryChannel] = None):
+    async def command(interaction: discord.Interaction, channel: discord.TextChannel,
+                      banner: Optional[str] = None, thumbnail: Optional[str] = None,
+                      staff_role: Optional[discord.Role] = None,
+                      ticket_folder: Optional[discord.CategoryChannel] = None):
         if not await admin_gate(interaction, bot):
             return
         if thumbnail and not URL_RE.match(thumbnail):
@@ -275,4 +286,4 @@ def add_quick_command(bot, group: app_commands.Group, admin_gate) -> None:
         thumbnail = thumbnail or (old.get("panel") or {}).get("thumbnail_url")
         await interaction.response.send_modal(QuickPanelModal(
             bot, channel, images=images, thumbnail=thumbnail,
-            staff_role=staff_role, ticket_folder=ticket_folder, old=old))
+            staff_role=staff_role, ticket_folder=ticket_folder, old=old, layout=layout))
