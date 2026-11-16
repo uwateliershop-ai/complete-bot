@@ -1,4 +1,4 @@
-"""/ticket post : the bot posts a plain message (no embed). Text, :server_emoji:, {sticker:Name}, uploaded files."""
+"""/post : the bot posts a plain message (no embed). Text, :server_emoji:, {sticker:Name}, uploaded files."""
 from __future__ import annotations
 
 import logging
@@ -77,7 +77,7 @@ def add_post_command(bot, group: app_commands.Group, admin_gate) -> None:
 
 
 # ---------------------------------------------------------------------------
-# /ticket imageurl : picture in, link out
+# /imageurl : picture in, link out
 # ---------------------------------------------------------------------------
 UPLOAD_API = "https://catbox.moe/user/api.php"       # free anonymous host; links are permanent and public
 MAX_BYTES = 20 * 1024 * 1024
@@ -119,5 +119,5 @@ def add_imageurl_command(bot, group: app_commands.Group, admin_gate) -> None:
             return await interaction.followup.send(f"{ERR} Upload failed: {exc}.", ephemeral=True)
         await interaction.followup.send(
             f"{OK} Your link (permanent, and anyone with it can open the picture):\n{url}\n"
-            "Paste it into any link box: thumbnail, bottom bar icon, embed images, `/ticket image add`.",
+            "Paste it into any link box: thumbnail, bottom bar icon, embed images, `/image add`.",
             ephemeral=True)
