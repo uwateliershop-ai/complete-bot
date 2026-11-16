@@ -98,6 +98,8 @@ PANEL = Entity(
             Field("title", "Embed title (if no template)", max=256),
             Field("description", "Description (if no template)", "para", max=2000),
             Field("color", "Color hex, e.g. #5865F2", "color", max=7),
+            Field("layout", "Layout: classic / box", "choice", required=True, choices=("classic", "box"),
+                  default="classic", max=7),
         ],
         "Images": [
             Field("image_url", "Banner image URL", "url", max=500),
@@ -233,7 +235,7 @@ CATEGORY = Entity(
         Picker("discord_category_id", "Discord channel category", "category"),
         Picker("form_id", "Ticket form", "ref", "form"),
     ],
-    toggles={"owner_can_close": "Owner can close", "mention_staff": "Ping staff"},
+    toggles={"owner_can_close": "Owner can close", "mention_staff": "Ping staff", "is_order": "Order flow"},
     enable_col="enabled",
 )
 
@@ -283,12 +285,89 @@ PERMS = Entity(
 
 TRANSCRIPTS = Entity(
     "transcripts", "guild_settings", "Transcript Settings", "transcript settings", "୨୧",
-    groups={},
+    groups={
+        "Look": [
+            Field("tr_title", "Title – {number} {category} {server}", max=200, placeholder="୨୧ Ticket #{number} transcript"),
+            Field("tr_footer", "Footer – {time} {server}", max=200, placeholder="Generated {time}"),
+            Field("tr_color", "Accent color hex, e.g. #FFB7D5", "color", max=7),
+            Field("tr_theme", "Theme: dark / light", "choice", choices=("dark", "light"), default="dark", max=5),
+        ],
+        "Archive post": [
+            Field("tr_archive_title", "Archive message title – {number}", max=200, placeholder="୨୧ Transcript – Ticket #{number}"),
+            Field("tr_archive_text", "Archive message text – {user} {category}", "para", max=1000),
+        ],
+    },
     pickers=[
         Picker("archive_channel_id", "Transcript archive channel", "channel"),
         Picker("log_channel_id", "Ticket log channel", "channel"),
     ],
-    toggles={"auto_transcript": "Auto transcripts"},
+    toggles={"auto_transcript": "Auto transcripts", "tr_show_form": "Show form answers",
+             "tr_show_log": "Show activity log", "tr_show_meta": "Show ticket details", "tr_dm_owner": "DM owner on close"},
+    name_col="id", scoped=False, singleton=True,
+)
+
+MESSAGES = Entity(
+    "messages", "guild_settings", "Messages", "messages", "⋆",
+    groups={
+        "Ticket": [
+            Field("msg_created", "Ticket created reply – {channel} {user}", "para", max=500, placeholder="ʚ♡ɞ Your ticket has been created: {channel}"),
+            Field("form_title", "Form message title", max=200, placeholder="୨୧ Ticket form"),
+            Field("msg_claim", "Claim message – {staff}", "para", max=500, placeholder="♡ {staff} has claimed this ticket."),
+            Field("msg_unclaim", "Unclaim message – {staff}", "para", max=500, placeholder="⟲ {staff} released this ticket."),
+            Field("msg_reopen", "Reopen message – {staff}", "para", max=500, placeholder="Reopened by {staff}."),
+        ],
+        "Closing": [
+            Field("msg_close_title", "Closed title", max=200, placeholder="𐙚 Ticket closed"),
+            Field("msg_close_text", "Closed text – {staff} {note} {user}", "para", max=1000,
+                  placeholder="Closed by {staff}.{note}"),
+            Field("msg_delete", "Delete notice", "para", max=300, placeholder="⋆ This ticket will be deleted in 5 seconds…"),
+        ],
+    },
+    name_col="id", scoped=False, singleton=True,
+)
+
+ORDER_CONFIRM = Entity(
+    "orders", "guild_settings", "Order Confirmation", "order confirmation", "⋆",
+    groups={
+        "Before (confirm)": [
+            Field("order_before_title", "Title", max=200, placeholder="୨୧ Confirm your order"),
+            Field("order_before_text", "Text – {user} {code} {yes} {edit}", "para", max=1500),
+            Field("order_yes_label", "Confirm button label", max=40, placeholder="Yes, proceed"),
+            Field("order_edit_label", "Edit button label", max=40, placeholder="Edit order"),
+        ],
+        "After (confirmed)": [
+            Field("order_after_title", "Title", max=200, placeholder="ʚ♡ɞ Order confirmed"),
+            Field("order_after_text", "Text – {user} {code} {position}", "para", max=1500),
+        ],
+    },
+    name_col="id", scoped=False, singleton=True,
+)
+
+QUEUE = Entity(
+    "queue", "guild_settings", "Queue", "queue", "⋆",
+    groups={
+        "Queue message": [
+            Field("queue_title", "Title – {code} {user}", max=200, placeholder="♡ Order {code}"),
+            Field("queue_text", "Text – {user} {category} {status} {position} {staff} {ticket}", "para", max=1500),
+            Field("queue_btn_processing", "Processing button label", max=40, placeholder="Processing"),
+            Field("queue_btn_done", "Done button label", max=40, placeholder="Done"),
+        ],
+        "Stages & updates": [
+            Field("stage_queued", "Stage name: waiting", max=40, placeholder="In the queue"),
+            Field("stage_processing", "Stage name: working on it", max=40, placeholder="Processing"),
+            Field("stage_done", "Stage name: finished", max=40, placeholder="Done"),
+            Field("queue_update_text", "Update message – {code} {status} {user}", "para", max=1000),
+        ],
+        "Live board": [
+            Field("board_title", "Board title", max=200, placeholder="୨୧ Order queue"),
+            Field("board_text", "Board text", "para", max=1000),
+        ],
+    },
+    pickers=[
+        Picker("queue_channel_id", "Queue channel (staff buttons)", "channel"),
+        Picker("board_channel_id", "Live board channel (use /queue board)", "channel"),
+    ],
+    toggles={"queue_dm": "DM the buyer on updates"},
     name_col="id", scoped=False, singleton=True,
 )
 
@@ -306,7 +385,7 @@ VOUCH = Entity(
 ENTITIES: dict[str, Entity] = {
     e.name: e for e in (
         PANEL, EMBED, EMBED_FIELD, BUTTON, AR_BUTTON, DROPDOWN, OPTION, CATEGORY, FORM, QUESTION,
-        AUTORESPONDER, AUTOMATION, GENERAL, PERMS, TRANSCRIPTS, VOUCH,
+        AUTORESPONDER, AUTOMATION, GENERAL, PERMS, TRANSCRIPTS, VOUCH, MESSAGES, ORDER_CONFIRM, QUEUE,
     )
 }
 
