@@ -1,6 +1,6 @@
 """Background timers for open tickets: nudge staff when nobody answered, remind a quiet owner, optionally auto-close.
 
-All values and both messages are edited in /ticket dashboard → Automation. 0 turns a timer off.
+All values and both messages are edited in /dashboard → Automation. 0 turns a timer off.
 """
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 
 import discord
 
+from . import media
 from .util import BLURPLE, get_settings, jload, render
 
 log = logging.getLogger(__name__)
@@ -55,7 +56,7 @@ async def watch_once(bot) -> None:
             await bot.db.update("tickets", ticket["id"], {"nudged": 1})
             ping = await staff_mentions(bot, guild, ticket, s)
             await channel.send(content=ping or None, embed=discord.Embed(
-                description=render(s["nudge_message"] or DEFAULT_NUDGE, **values), color=BLURPLE))
+                description=media.rich_text(guild, render(s["nudge_message"] or DEFAULT_NUDGE, **values)).text, color=BLURPLE))
             continue
 
         # the ticket owner went quiet
@@ -64,7 +65,7 @@ async def watch_once(bot) -> None:
             continue
         if not ticket["idle_warned"] and now - last >= timedelta(hours=hours):
             await bot.db.update("tickets", ticket["id"], {"idle_warned": 1})
-            text = render(s["idle_message"] or DEFAULT_IDLE, **values)
+            text = media.rich_text(guild, render(s["idle_message"] or DEFAULT_IDLE, **values)).text
             if s["autoclose_hours"]:
                 text += f"\nThis ticket will close automatically in {s['autoclose_hours']}h if there's no reply."
             await channel.send(content=values["user"], embed=discord.Embed(description=text, color=BLURPLE))
