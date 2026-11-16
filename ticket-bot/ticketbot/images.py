@@ -1,4 +1,4 @@
-"""Panel pictures:  /ticket image add · bulk · list · remove · clear
+"""Panel pictures:  /image add · bulk · list · remove · clear
 
 A panel can hold any number of pictures or GIFs. They are posted in order above the panel (10 per message).
 Add them one by one with `add` (a link, or an uploaded file), or many at once with `bulk` (one link per line).
@@ -26,7 +26,7 @@ async def target_panel(bot, interaction: discord.Interaction, text: Optional[str
     if text:
         row = await resolve_panel(bot, guild, text)
         if row is None:
-            return None, f"{ERR} I couldn't find that panel. Pick one from the list, or see `/ticket panels`."
+            return None, f"{ERR} I couldn't find that panel. Pick one from the list, or see `/panels`."
         return row, None
     here = await bot.db.fetchone("SELECT * FROM panels WHERE guild_id = ? AND name = ?",
                                  (guild.id, f"{QUICK_PREFIX}{interaction.channel_id}"))
@@ -36,7 +36,7 @@ async def target_panel(bot, interaction: discord.Interaction, text: Optional[str
     if len(rows) == 1:
         return rows[0], None
     if not rows:
-        return None, f"{ERR} There are no panels yet. Run `/ticket quickpanel` first."
+        return None, f"{ERR} There are no panels yet. Run `/quickpanel` first."
     return None, f"{ERR} Pick a `panel`, or run this in the channel of a quick panel."
 
 
@@ -44,9 +44,9 @@ async def finish(bot, guild: discord.Guild, panel: dict, lead: str, repost: bool
     """Re-post the panel so a change shows (when it is already posted), and build the reply."""
     fresh = await bot.db.get("panels", panel["id"])
     if not fresh["message_id"]:
-        return f"{lead}\nThis panel isn't posted yet. `/ticket publish` posts it with its pictures."
+        return f"{lead}\nThis panel isn't posted yet. `/publish` posts it with its pictures."
     if not repost:
-        return f"{lead}\nNot shown yet. Run `/ticket publish` when you're done adding."
+        return f"{lead}\nNot shown yet. Run `/publish` when you're done adding."
     return f"{lead}\n{await panels.publish(bot, guild, panel['id'])}"
 
 
@@ -96,7 +96,11 @@ class BulkImageModal(discord.ui.Modal):
 def add_image_commands(bot, group: app_commands.Group, admin_gate) -> None:
     db = bot.db
     panel_autocomplete = make_panel_autocomplete(bot)
-    image = app_commands.Group(name="image", description="Pictures and GIFs shown above a ticket panel", parent=group)
+    nested = isinstance(group, app_commands.Group)
+    image = app_commands.Group(name="image", description="Pictures and GIFs shown above a ticket panel",
+                               parent=group if nested else None, guild_only=True)
+    if not nested:
+        group.add_command(image)
 
     @image.command(name="add", description="Add ONE picture or GIF to a panel. Run it again for the next one.")
     @app_commands.describe(
@@ -172,13 +176,13 @@ def add_image_commands(bot, group: app_commands.Group, admin_gate) -> None:
                 break
             lines.append(line)
         embed = discord.Embed(title=f"୨୧ Pictures · {truncate(panel_label(interaction.guild, row), 150)}", color=BLURPLE,
-                              description="\n".join(lines) or "No pictures yet. Use `/ticket image add`.")
+                              description="\n".join(lines) or "No pictures yet. Use `/image add`.")
         if lines:
-            embed.set_footer(text=f"Showing {len(lines)} of {len(images)} • remove with /ticket image remove <number>")
+            embed.set_footer(text=f"Showing {len(lines)} of {len(images)} • remove with /image remove <number>")
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @image.command(name="remove", description="Remove one picture (by its number), or a range.")
-    @app_commands.describe(number="Number from /ticket image list", last="Also remove everything up to this number",
+    @app_commands.describe(number="Number from /image list", last="Also remove everything up to this number",
                            panel="Which panel (default: this channel's quick panel)",
                            repost="Re-post the panel now (default: yes)")
     @app_commands.autocomplete(panel=panel_autocomplete)
