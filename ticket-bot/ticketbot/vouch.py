@@ -1,6 +1,6 @@
 """Vouches: when a ticket closes the owner gets a vouch button (in the ticket and by DM).
 The vouch form has a rating, the item/service, the staff who helped, a comment and an optional image;
-it is posted to the vouch channel set in /ticket dashboard -> Vouch Settings. One vouch per ticket."""
+it is posted to the vouch channel set in /dashboard -> Vouch Settings. One vouch per ticket."""
 from __future__ import annotations
 
 import io
@@ -9,14 +9,13 @@ import sqlite3
 
 import discord
 
-from . import media
-from .util import get_settings, render, truncate
+from . import media, texts
+from .util import get_settings, truncate
 
 log = logging.getLogger(__name__)
 
 PINK = 0xFFB7D5
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
-DEFAULT_REQUEST = "Thank you for choosing us {user}! Would you like to leave a vouch? ♡"
 
 
 def now_iso() -> str:
@@ -175,9 +174,8 @@ async def send_prompt(bot, channel: discord.TextChannel, ticket: dict) -> None:
     if not settings["vouch_enabled"] or await already_vouched(bot, ticket["id"]):
         return
     guild = channel.guild
-    text = render(settings["vouch_message"] or DEFAULT_REQUEST, user=f"<@{ticket['owner_id']}>",
-                  number=f"{ticket['number']:04d}", guild=guild.name)
-    text = media.rich_text(guild, text).text
+    text = texts.say(guild, settings, "vouch_message", user=f"<@{ticket['owner_id']}>",
+                     number=f"{ticket['number']:04d}", server=guild.name)
     embed = discord.Embed(title="♡ How did we do?", description=truncate(text, 4000), color=PINK)
 
     # separate message in the ticket, then a DM (still works after the channel is deleted)
