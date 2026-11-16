@@ -163,6 +163,19 @@ class Modal:
 ui.View, ui.Modal, ui.Button, ui.Select, ui.DynamicItem = View, Modal, Button, Select, DynamicItem
 ui.RoleSelect, ui.UserSelect, ui.ChannelSelect, ui.TextInput, ui.button = RoleSelect, UserSelect, ChannelSelect, TextInput, button
 ui.Label, ui.FileUpload = Label, FileUpload
+class LayoutView(View): pass
+class Container(Item):
+    def __init__(s, *children, accent_colour=None, **k): s.children, s.accent_colour = list(children), accent_colour
+class ActionRow(Item):
+    def __init__(s, *children, **k): s.children = list(children)
+class MediaGallery(Item):
+    def __init__(s, *items, **k): s.items = list(items)
+class TextDisplay(Item):
+    def __init__(s, content, **k): s.content = content
+class Separator(Item):
+    def __init__(s, **k): pass
+ui.LayoutView, ui.Container, ui.ActionRow, ui.MediaGallery, ui.TextDisplay, ui.Separator = LayoutView, Container, ActionRow, MediaGallery, TextDisplay, Separator
+d.MediaGalleryItem = lambda url, **k: types.SimpleNamespace(url=url)
 d.SelectDefaultValue, d.SelectDefaultValueType = SelectDefaultValue, SelectDefaultValueType
 d.ui = ui; d.SelectOption = SelectOption; sys.modules["discord.ui"] = ui
 
@@ -180,7 +193,10 @@ class Group:
     def command(s, name, description):
         def deco(fn): fn.__desc__ = description; s.cmds[name] = fn; return fn
         return deco
+    def add_command(s, cmd): s.cmds[cmd.name] = cmd
+    def get_commands(s): return list(s.cmds.values())
 ac.Choice, ac.Group = Choice, Group
+ac.guild_only = lambda: (lambda fn: fn)
 ac.describe = lambda **k: (lambda fn: fn)
 ac.autocomplete = lambda **k: (lambda fn: (setattr(fn, "__autocomplete__", k), fn)[1])
 ac.AppCommandError = Exception
