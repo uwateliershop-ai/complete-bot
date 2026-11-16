@@ -76,7 +76,7 @@ async def main():
     db = Database(os.path.join(tempfile.mkdtemp(), "t.db")); await db.connect()
     guild = FakeGuild()
     admin = FakeMember(1, guild, admin=True); guild.members[1] = admin
-    bot = NS(db=db, user_locks={}, channels={}, views=[])
+    bot = NS(db=db, user_locks={}, channels={}, views=[], tree=discord.app_commands.Group("tree", ""))
     bot.get_channel = lambda i: guild.channels.get(i)
     bot.get_guild = lambda i: guild
     bot.add_view = lambda v, message_id=None: bot.views.append((v, message_id))
@@ -341,7 +341,7 @@ async def main():
     # /ticket help + admin / staff commands (admin.py)
     # =====================================================================
     from ticketbot import admin as adm
-    cmds = build_group(bot).cmds
+    cmds = {**bot.tree.cmds, **build_group(bot).cmds}
 
     def said(i):
         out = []
@@ -383,7 +383,7 @@ async def main():
     ok(len(he.fields) <= 25 and total_chars < 6000 and all(len(v) <= 1024 and len(n) <= 256 for n, v, _ in he.fields),
        f"help: within Discord embed limits ({total_chars} chars)")
     help_text = he.description + " ".join(v for _, v, _ in he.fields)
-    def documented(n): return f"/ticket {n}" in help_text or f"`{n}`" in help_text
+    def documented(n): return f"/ticket {n}" in help_text or f"/{n}" in help_text or f"`{n}`" in help_text
     ok(all(documented(n) for n in wanted - {"help"}), "help: documents every command: "
        + ", ".join(n for n in wanted - {"help"} if not documented(n)))
     ok(total_chars < 3300, f"help: not verbose ({total_chars} chars)")
@@ -625,10 +625,10 @@ async def main():
     i = FakeInteraction(bob, guild); await cmds["reopen"](i, number=14)
     ok("isn't closed" in said(i), "reopen: open ticket rejected")
     bot.user = NS(id=500)
-    stale = NS(author=NS(id=500), embeds=[NS(title=tickets.CLOSED_TITLE)], edited=None)
+    stale = NS(author=NS(id=500), embeds=[], components=[NS(children=[NS(custom_id="tb:t:reopen")])], edited=None)
     async def stale_edit(**k): stale.edited = k
     stale.edit = stale_edit
-    chatter = NS(author=NS(id=2), embeds=[], edit=None)
+    chatter = NS(author=NS(id=2), embeds=[], components=[], edit=None)
     async def hist_with_stale(**k):
         for m in (chatter, stale): yield m
     ch10.history = hist_with_stale
@@ -879,6 +879,79 @@ async def main():
     pdeleted.clear(); ich.send = flaky
     msg = await panels.publish(bot, guild, ipid); ich.send = real
     ok("couldn't post" in msg and len(pdeleted) == 1, "publish: failure midway deletes the partial gallery")
+
+    # ---- order confirmation (before / after), queue, editable texts, server emojis, transcript look, box panel
+    from ticketbot import orderflow, texts, transcripts
+    from ticketbot.util import get_settings
+    og = FakeChannel(9101, "order-0099", guild); guild.channels[9101] = og
+    qch = FakeChannel(9102, "queue", guild); guild.channels[9102] = qch
+    buyer = FakeMember(77, guild); guild.members[77] = buyer
+    ocat = await db.insert("categories", {"guild_id": 1, "name": "OrderCat", "is_order": 1})
+    answers = [{"q": "What?", "a": "A logo"}, {"q": "Details", "a": "blue"}]
+    otid = await db.insert("tickets", {"guild_id": 1, "number": 99, "channel_id": 9101, "owner_id": 77,
+                                       "category_id": ocat, "status": "open", "created_at": tickets.now_iso(),
+                                       "form_answers": __import__("json").dumps(answers)})
+    ticket = await db.get("tickets", otid); category = await db.get("categories", ocat)
+    await db.update("guild_settings", 1, {"order_before_title": ":rin_happy: Check it", "queue_channel_id": 9102,
+                                          "order_yes_label": "Looks good", "stage_queued": "Waiting :dance:"})
+    settings = await get_settings(bot, 1)
+    await orderflow.start(bot, og, ticket, category, answers, 5555, settings)
+    before = og.sent[-1][1]
+    ok(before["embed"].title.startswith("<:rin_happy:") and len(before["embed"].fields) == 2,
+       "order before: confirmation shows the order, server emoji in the title")
+    ok(before["view"].yes.label == "Looks good", "order before: button label comes from the settings")
+    plain_cat = await db.insert("categories", {"guild_id": 1, "name": "NoOrder"})
+    n_before = len(og.sent)
+    await orderflow.start(bot, og, ticket, await db.get("categories", plain_cat), answers, None, settings)
+    ok(len(og.sent) == n_before, "order flow: categories without Order flow are untouched")
+    order = await db.fetchone("SELECT * FROM ticket_orders WHERE ticket_id = ?", (otid,))
+    stranger = FakeMember(55, guild)
+    v = orderflow.OrderConfirmView(bot)
+    i = FakeInteraction(stranger, guild, channel=og); await v.yes.callback(i) if hasattr(v.yes, "callback") else None
+    ok(await db.get("ticket_orders", order["id"]) and (await db.get("ticket_orders", order["id"]))["status"] == "pending",
+       "order before: a stranger cannot confirm")
+    i = FakeInteraction(buyer, guild, channel=og)
+    await orderflow.confirm(bot, guild, og, order, ticket)
+    order = await db.get("ticket_orders", order["id"])
+    ok(order["status"] == "queued" and order["queue_message_id"], "order after: confirmed and queued")
+    ok(qch.sent and qch.sent[-1][1]["embed"].title.startswith("♡ Order 0099"), "queue: message posted in the queue channel")
+    ok("Waiting <a:dance:" in qch.sent[-1][1]["embed"].description, "queue: stage name editable + server emoji")
+    ok(any("Order confirmed" in str(k["embed"].title) and "number **1**" in k["embed"].description
+           for _, k in og.sent if k.get("embed")), "order after: confirmation with queue position")
+    await db.update("guild_settings", 1, {"queue_update_text": "Hey! {code} is {status} :rin_happy:"})
+    await orderflow.set_status(bot, guild, order, "processing", admin)
+    ok((await db.get("ticket_orders", order["id"]))["status"] == "processing"
+       and "<:rin_happy:" in og.sent[-1][1]["embed"].description, "queue: status update in the ticket uses the edited text")
+    ok(buyer.dms and "Hey!" in buyer.dms[-1][1]["embed"].description, "queue: buyer notified by DM")
+    await orderflow.set_status(bot, guild, await db.get("ticket_orders", order["id"]), "done", admin)
+    ok((await db.get("ticket_orders", order["id"]))["status"] == "done", "queue: order marked done")
+    bc = FakeChannel(9103, "board", guild); guild.channels[9103] = bc
+    ok("board posted" in (await orderflow.post_board(bot, guild, bc)).lower() and bc.sent, "queue: live board posted")
+
+    # editable ticket messages
+    await db.update("guild_settings", 1, {"msg_close_title": ":rin_happy: Bye", "form_title": "Order form"})
+    settings = await get_settings(bot, 1)
+    ok(texts.say(guild, settings, "msg_close_title").startswith("<:rin_happy:"), "messages: server emoji works in edited texts")
+    ok(tickets.form_embed(guild, settings, answers).title == "Order form", "messages: form title editable")
+    ok(texts.say(guild, {}, "stage_done") == "Done", "messages: blank setting falls back to the default")
+
+    # transcript look
+    await db.update("guild_settings", 1, {"tr_title": "Receipt {number}", "tr_footer": "bye {server}", "tr_theme": "light",
+                                          "tr_color": 0xFFB7D5, "tr_show_log": 0})
+    html_doc = await transcripts.render_html(bot, og, ticket, [], [], category, "buyer", "—", await get_settings(bot, 1))
+    ok("Receipt 0099" in html_doc and "bye Guild" in html_doc and "ffb7d5" in html_doc and "Ticket activity" not in html_doc
+       and "#f2f3f5" in html_doc, "transcript: title, footer, color, theme and sections editable")
+
+    # box panel
+    bpid = await db.insert("panels", {"guild_id": 1, "name": "boxy", "content": "Hi :rin_happy:", "embed_ids": "[]",
+                                      "channel_id": 42, "layout": "box"})
+    bdd = await db.insert("panel_dropdowns", {"panel_id": bpid, "placeholder": "Pick", "min_values": 1, "max_values": 1})
+    await db.insert("dropdown_options", {"dropdown_id": bdd, "label": "Buy", "category_id": ocat, "position": 0})
+    msg = await panels.publish(bot, guild, bpid)
+    sent = dest.sent[-1][1]
+    ok("Box panel published" in msg and "view" in sent and "embeds" not in sent and "content" not in sent,
+       "box panel: published as one box (no embeds / plain content)")
+    ok(panels.is_box(await db.get("panels", bpid)), "box panel: layout stored")
 
 asyncio.run(main())
 print("\nRESULT:", "FAILURES" if ok.failed else "ALL PASSED")
