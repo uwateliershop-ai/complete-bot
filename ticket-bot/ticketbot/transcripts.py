@@ -11,6 +11,7 @@ from pathlib import Path
 
 import discord
 
+from . import texts
 from .util import BLURPLE, get_settings, jload
 
 log = logging.getLogger(__name__)
@@ -46,7 +47,14 @@ table{border-collapse:collapse;width:100%;font-size:13px}td,th{padding:5px 8px;b
 th{color:#b5bac1}.foot{margin-top:28px;font-size:12px;color:#949ba4;text-align:center}
 """
 
+LIGHT_CSS = """
+body{background:#f2f3f5;color:#2e3338}.head,.embed,.att a{background:#fff}.head h1,.name,.embed .t,h2{color:#060607}
+.meta{color:#4e5058}.meta b{color:#060607}.msg:hover{background:#e8eaed}.tag,.ts,.sys,.foot,th{color:#5c5e66}
+code,pre{background:#e3e5e8;border-color:#d4d7dc}h2,td,th{border-bottom-color:#d4d7dc}.content a,.att a{color:#006ce7}
+"""
+
 LOG_LABELS = {
+    "order_confirmed": "Order Confirmed", "order_processing": "Order Processing", "order_done": "Order Done",
     "ticket_created": "Ticket Created", "ticket_claimed": "Ticket Claimed", "ticket_unclaimed": "Ticket Unclaimed",
     "ticket_transferred": "Ticket Transferred", "user_added": "User Added", "user_removed": "User Removed",
     "ticket_renamed": "Ticket Renamed", "ticket_closed": "Ticket Closed", "ticket_reopened": "Ticket Reopened",
@@ -120,7 +128,8 @@ def _embeds_html(embeds) -> str:
 
 
 async def render_html(bot, channel, ticket: dict, messages: list, logs: list, category, owner_label: str,
-                      claimed_label: str) -> str:
+                      claimed_label: str, settings: dict | None = None) -> str:
+    settings = settings or {}
     budget = [INLINE_BUDGET]
     rows = []
     for m in messages:
@@ -150,7 +159,7 @@ async def render_html(bot, channel, ticket: dict, messages: list, logs: list, ca
     )
     answers = jload(ticket["form_answers"])
     form_html = ""
-    if answers:
+    if answers and settings.get("tr_show_form", 1):
         form_html = "<h2>Form answers</h2><table>" + "".join(
             f"<tr><th>{html.escape(a['q'])}</th><td>{html.escape(a['a'])}</td></tr>" for a in answers
         ) + "</table>"
@@ -163,16 +172,27 @@ async def render_html(bot, channel, ticket: dict, messages: list, logs: list, ca
         ("Closed", html.escape((ticket["closed_at"] or "—")[:19].replace("T", " ")) + (" UTC" if ticket["closed_at"] else "")),
         ("Messages", str(len(messages))),
     ]
-    meta_html = "".join(f"<div><b>{k}:</b> {v}</div>" for k, v in meta)
+    meta_html = "".join(f"<div><b>{k}:</b> {v}</div>" for k, v in meta) if settings.get("tr_show_meta", 1) else ""
     now = discord.utils.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+    guild = channel.guild
+    values = {"number": f"{ticket['number']:04d}", "time": now, "server": guild.name,
+              "category": category["name"] if category else "—"}
+    title = render_markdown(texts.say(guild, settings, "tr_title", **values))
+    footer = render_markdown(texts.say(guild, settings, "tr_footer", **values))
+    accent = f"#{(settings.get('tr_color') if settings.get('tr_color') is not None else 0x5865F2):06x}"
+    theme_css = LIGHT_CSS if (settings.get("tr_theme") or "dark").lower() == "light" else ""
+    log_html = ""
+    if settings.get("tr_show_log", 1):
+        log_html = (f"<h2>Ticket activity</h2><table><tr><th>Time</th><th>Action</th><th>By</th><th>Details</th></tr>"
+                    f"{log_rows}</table>")
     return (
         f'<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">'
         f'<meta name="viewport" content="width=device-width,initial-scale=1">'
-        f"<title>Transcript – Ticket #{ticket['number']:04d}</title><style>{CSS}</style></head><body><div class='wrap'>"
-        f"<div class='head'><h1>୨୧ Ticket #{ticket['number']:04d} transcript</h1><div class='meta'>{meta_html}</div></div>"
+        f"<title>{html.escape(re.sub(r'<[^>]+>', '', title))}</title><style>{CSS}{theme_css}"
+        f".head{{border-left-color:{accent}}}</style></head><body><div class='wrap'>"
+        f"<div class='head'><h1>{title}</h1><div class='meta'>{meta_html}</div></div>"
         f"{form_html}<h2>Conversation</h2>{''.join(rows) or '<div class=sys>No messages.</div>'}"
-        f"<h2>Ticket activity</h2><table><tr><th>Time</th><th>Action</th><th>By</th><th>Details</th></tr>{log_rows}</table>"
-        f"<div class='foot'>Generated {now}</div></div></body></html>"
+        f"{log_html}<div class='foot'>{footer}</div></div></body></html>"
     )
 
 
@@ -194,6 +214,7 @@ async def create_transcript(bot, channel: discord.TextChannel, ticket: dict, *, 
         bot, channel, ticket, messages, logs, category,
         owner_label=_name(guild, ticket["owner_id"]),
         claimed_label=_name(guild, ticket["claimed_by"]),
+        settings=await get_settings(bot, guild.id),
     )
     stamp = discord.utils.utcnow().strftime("%Y%m%d-%H%M%S")
     folder = Path(os.getenv("TRANSCRIPT_DIR", "data/transcripts")) / str(guild.id)
@@ -220,7 +241,11 @@ async def send_to_archive(bot, guild, ticket, category, path: Path, record_id: i
     channel = guild.get_channel(settings["archive_channel_id"] or 0)
     if not isinstance(channel, discord.abc.Messageable):
         return
-    embed = discord.Embed(title=f"୨୧ Transcript – Ticket #{ticket['number']:04d}", color=BLURPLE,
+    values = {"number": f"{ticket['number']:04d}", "server": guild.name, "category": category["name"] if category else "—",
+              "user": f"<@{ticket['owner_id']}>"}
+    accent = settings.get("tr_color") if settings.get("tr_color") is not None else BLURPLE
+    embed = discord.Embed(title=texts.say(guild, settings, "tr_archive_title", **values)[:256], color=accent,
+                          description=texts.say(guild, settings, "tr_archive_text", **values)[:4000] or None,
                           timestamp=discord.utils.utcnow())
     embed.add_field(name="Owner", value=f"<@{ticket['owner_id']}>")
     embed.add_field(name="Category", value=category["name"] if category else "—")
