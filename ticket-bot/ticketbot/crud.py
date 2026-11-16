@@ -132,7 +132,7 @@ async def describe(bot, entity: Entity, row: dict) -> discord.Embed:
         embed.add_field(name="Status", value=status, inline=False)
         count = len(await media.list_images(bot.db, row["id"]))
         embed.add_field(name="Pictures", inline=False,
-                        value=f"{count} · add with `/ticket image add`" if count else "None · add with `/ticket image add`")
+                        value=f"{count} · add with `/image add`" if count else "None · add with `/image add`")
     return embed
 
 
@@ -218,6 +218,9 @@ SECTIONS = [
     ("automation", "⋆", "Automation", "Staff nudge, idle reminder, auto-close and their messages"),
     ("permissions", "⋆", "Permissions", "Manage staff roles and access permissions"),
     ("transcripts", "୨୧", "Transcript Settings", "Configure transcript generation and archives"),
+    ("messages", "⋆", "Messages", "Created, claim, close, reopen and delete texts"),
+    ("orders", "⋆", "Order Confirmation", "The confirm-before and confirmed-after messages"),
+    ("queue", "⋆", "Queue", "Queue texts, stage names, buttons, channel and live board"),
     ("vouch", "♡", "Vouch Settings", "Vouch channel, request text and on/off"),
     ("general", "⋆", "General Settings", "Manage general ticket behavior"),
 ]
@@ -264,7 +267,8 @@ async def section_screen(bot, user_id: int, guild_id: int, key: str) -> dict:
     if key == "forms":
         return await crud_screen(bot, user_id, guild_id, E["form"])
     name = {"permissions": "permissions", "transcripts": "transcripts", "general": "general",
-            "automation": "automation", "vouch": "vouch"}[key]
+            "automation": "automation", "vouch": "vouch",
+            "messages": "messages", "orders": "orders", "queue": "queue"}[key]
     return await edit_screen(bot, user_id, guild_id, E[name], guild_id)
 
 
@@ -426,6 +430,12 @@ class CrudView(BaseView):
                         "⋆｡°✩ Nothing to preview: add **Reply text** or pick an **embed card**.", ephemeral=True)
                 kwargs["content"] = "⋆ **Preview** (not sent; buttons are disabled here)\n" + (kwargs["content"] or "")
                 return await interaction.response.send_message(ephemeral=True, **kwargs)
+            if key == "preview" and self.entity.name == "panel" and panels.is_box(sel):
+                try:
+                    view, files, notes = await panels.render_box(bot, sel, preview=True)
+                except ValueError as exc:
+                    return await interaction.response.send_message(f"⋆｡°✩ {exc}", ephemeral=True)
+                return await interaction.response.send_message(ephemeral=True, view=view, files=files)
             if key == "preview":
                 try:
                     embeds, view = await preview_for(bot, self.entity, sel)
