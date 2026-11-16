@@ -7,7 +7,7 @@ import logging
 
 import discord
 
-from . import media, transcripts, vouch
+from . import media, orderflow, texts, transcripts, vouch
 from .ui import ConfirmView
 from .util import (BLURPLE, GREEN, GREY, RED, channel_name, ensure_number, get_settings, is_admin,
                    is_staff, jload, render, truncate)
@@ -19,10 +19,10 @@ ACTION_LABELS = {
     "ticket_transferred": "Ticket Transferred", "user_added": "User Added", "user_removed": "User Removed",
     "ticket_renamed": "Ticket Renamed", "ticket_closed": "Ticket Closed", "ticket_reopened": "Ticket Reopened",
     "ticket_deleted": "Ticket Deleted",
+    "order_confirmed": "Order Confirmed", "order_processing": "Order Processing", "order_done": "Order Done",
 }
 
 
-CLOSED_TITLE = "𐙚 Ticket closed"
 
 
 def now_iso() -> str:
@@ -135,6 +135,15 @@ class TicketFormModal(discord.ui.Modal):
         log.exception("Ticket form error", exc_info=error)
 
 
+def form_embed(guild, settings: dict, answers: list[dict]) -> discord.Embed:
+    """The form answers, shown as their own message (title editable in /dashboard → Messages)."""
+    embed = discord.Embed(title=truncate(texts.say(guild, settings, "form_title"), 256), color=BLURPLE,
+                          timestamp=discord.utils.utcnow())
+    for ans in answers:
+        embed.add_field(name=truncate(ans["q"], 256), value=truncate(ans["a"], 1024), inline=False)
+    return embed
+
+
 # ---------------------------------------------------------------------------
 # Creation
 # ---------------------------------------------------------------------------
@@ -206,14 +215,19 @@ async def create_ticket(interaction: discord.Interaction, bot, category: dict, p
         if not rich.stickers:
             raise
         await channel.send(content=mentions, embed=embed, view=TicketControlView(bot))   # without the stickers
+    form_message = None
     if answers:                                        # the form goes in its own message, apart from the welcome
-        form_embed = discord.Embed(title="୨୧ Ticket form", color=BLURPLE, timestamp=discord.utils.utcnow())
-        for ans in answers:
-            form_embed.add_field(name=truncate(ans["q"], 256), value=truncate(ans["a"], 1024), inline=False)
-        await channel.send(embed=form_embed)
+        form_message = await channel.send(embed=form_embed(guild, settings, answers))
+    try:
+        await orderflow.start(bot, channel, ticket, category, answers, form_message.id if form_message else None,
+                              settings)                # order confirmation, only for "order flow" categories
+    except Exception:
+        log.exception("Order confirmation failed")
     await log_event(bot, guild, ticket, "ticket_created", user.id,
                     f"Category: {category['name']} | Channel: #{channel.name}")
-    await interaction.followup.send(f"ʚ♡ɞ Your ticket has been created: {channel.mention}", ephemeral=True)
+    await interaction.followup.send(texts.say(guild, settings, "msg_created", channel=channel.mention,
+                                              user=user.mention, number=f"{number:04d}", category=category["name"]),
+                                    ephemeral=True)
 
 
 # ---------------------------------------------------------------------------
@@ -261,8 +275,10 @@ class TicketControlView(discord.ui.View):
             return await interaction.response.send_message(f"⋆｡°✩ This ticket is already claimed by {who}.", ephemeral=True)
         await self.bot.db.update("tickets", ticket["id"], {"claimed_by": interaction.user.id})
         await log_event(self.bot, interaction.guild, ticket, "ticket_claimed", interaction.user.id)
+        settings = await get_settings(self.bot, interaction.guild_id)
         await interaction.response.send_message(embed=discord.Embed(
-            description=f"♡ {interaction.user.mention} has claimed this ticket.", color=GREEN))
+            description=texts.say(interaction.guild, settings, "msg_claim", staff=interaction.user.mention,
+                                  number=f"{ticket['number']:04d}"), color=GREEN))
 
     @discord.ui.button(label="⟲ Unclaim", style=discord.ButtonStyle.secondary, custom_id="tb:t:unclaim", row=0)
     async def unclaim(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -277,7 +293,8 @@ class TicketControlView(discord.ui.View):
         await self.bot.db.update("tickets", ticket["id"], {"claimed_by": None})
         await log_event(self.bot, interaction.guild, ticket, "ticket_unclaimed", interaction.user.id)
         await interaction.response.send_message(embed=discord.Embed(
-            description=f"⟲ {interaction.user.mention} released this ticket.", color=GREY))
+            description=texts.say(interaction.guild, settings, "msg_unclaim", staff=interaction.user.mention,
+                                  number=f"{ticket['number']:04d}"), color=GREY))
 
     @discord.ui.button(label="⇄ Transfer", style=discord.ButtonStyle.primary, custom_id="tb:t:transfer", row=0)
     async def transfer(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -542,13 +559,22 @@ async def close_ticket(bot, channel: discord.TextChannel, ticket_id: int, closer
     note = ""
     if settings["auto_transcript"]:
         try:
-            await transcripts.create_transcript(bot, channel, ticket, archive=True)
+            path = await transcripts.create_transcript(bot, channel, ticket, archive=True)
             note = "\n୨୧ A transcript has been saved."
+            owner = guild.get_member(ticket["owner_id"])
+            if settings.get("tr_dm_owner") and owner:
+                try:
+                    await owner.send(f"୨୧ Transcript of your ticket **#{ticket['number']:04d}** in **{guild.name}**:",
+                                     file=discord.File(path))
+                except (discord.Forbidden, discord.HTTPException):
+                    pass
         except Exception:                                   # never block closing on a transcript failure
             log.exception("Auto transcript failed")
             note = "\n⋆｡°✩ Transcript generation failed – staff can retry with the Transcript button."
-    embed = discord.Embed(title=CLOSED_TITLE, color=RED, timestamp=discord.utils.utcnow(),
-                          description=f"Closed by {closer.mention}.{note}\nStaff can reopen or delete this ticket below.")
+    values = {"staff": closer.mention, "note": note, "number": f"{ticket['number']:04d}", "user": f"<@{ticket['owner_id']}>"}
+    embed = discord.Embed(title=truncate(texts.say(guild, settings, "msg_close_title", **values), 256), color=RED,
+                          timestamp=discord.utils.utcnow(),
+                          description=truncate(texts.say(guild, settings, "msg_close_text", **values), 4000))
     await channel.send(embed=embed, view=ClosedView(bot))
     try:
         await vouch.send_prompt(bot, channel, ticket)      # separate vouch request (channel + DM)
@@ -562,9 +588,11 @@ async def reopen_ticket(bot, channel: discord.TextChannel, ticket: dict, categor
     ticket = await db.get("tickets", ticket["id"])
     await _restrict_owner(guild, channel, ticket["id"], ticket["owner_id"], bot, can_send=True)
     await log_event(bot, guild, ticket, "ticket_reopened", user.id)
+    settings = await get_settings(bot, guild.id)
     await channel.send(content=f"<@{ticket['owner_id']}>", embed=discord.Embed(
-        title="𐙚 Ticket reopened", description=f"Reopened by {user.mention}.", color=GREEN,
-        timestamp=discord.utils.utcnow()), view=TicketControlView(bot))
+        title="𐙚 Ticket reopened", color=GREEN, timestamp=discord.utils.utcnow(),
+        description=texts.say(guild, settings, "msg_reopen", staff=user.mention, number=f"{ticket['number']:04d}")),
+        view=TicketControlView(bot))
 
 
 async def delete_ticket(bot, channel: discord.TextChannel, ticket_id: int, user: discord.Member,
@@ -581,7 +609,8 @@ async def delete_ticket(bot, channel: discord.TextChannel, ticket_id: int, user:
     await db.update("tickets", ticket_id, {"status": "deleted", "closed_at": ticket["closed_at"] or now_iso(),
                                            "closed_by": ticket["closed_by"] or user.id})
     await log_event(bot, guild, ticket, "ticket_deleted", user.id)
-    await channel.send("⋆ This ticket will be deleted in 5 seconds…")
+    await channel.send(texts.say(guild, await get_settings(bot, guild.id), "msg_delete",
+                                 number=f"{ticket['number']:04d}"))
     await asyncio.sleep(5)
     try:
         await channel.delete(reason=f"Ticket #{ticket['number']:04d} deleted by {user}")
