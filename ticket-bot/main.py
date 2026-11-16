@@ -10,7 +10,7 @@ from discord import app_commands
 from discord.ext import commands
 from dotenv import load_dotenv
 
-from ticketbot import autoresponder, automation, panels, tickets, vouch
+from ticketbot import autoresponder, automation, orderflow, panels, tickets, vouch
 from ticketbot.commands import build_group
 from ticketbot.db import Database
 
@@ -32,6 +32,8 @@ class TicketBot(commands.Bot):
         # Persistent views: survive restarts because their custom_ids are stable.
         self.add_view(tickets.TicketControlView(self))
         self.add_view(tickets.ClosedView(self))
+        self.add_view(orderflow.OrderConfirmView(self))          # order confirmation buttons
+        self.add_view(orderflow.QueueView(self))                 # queue staff buttons
         await panels.register_panel_views(self)
         self.add_dynamic_items(autoresponder.ResponderButton)   # auto-responder buttons survive restarts
         self.add_dynamic_items(vouch.VouchButton)               # vouch buttons (channel + DM) survive restarts
