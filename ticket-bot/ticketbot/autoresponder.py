@@ -1,6 +1,6 @@
 """Auto-responders: keyword replies with text, an embed card and buttons.
 
-Everything is configured in /ticket dashboard → Auto-Responders. A responder can live in ticket channels only
+Everything is configured in /dashboard → Auto-Responders. A responder can live in ticket channels only
 (default) or in the whole server / one channel, and its reply can carry buttons (link, reply, role, open ticket).
 This module also keeps the per-ticket activity timestamps that the idle / unclaimed timers rely on.
 """
